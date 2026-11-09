@@ -56,7 +56,8 @@
 #solar-dashboard #solar-recycle-month { color: #a43131; }
 #solar-dashboard #solar-log-message:empty { display: none; }
 #solar-dashboard .solar-dashboard-grid {
-  display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(250px, 1fr); gap: 12px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 320px); gap: 12px;
+  align-items: stretch;
 }
 #solar-dashboard .solar-routes-card { background: linear-gradient(155deg, var(--solar-surface) 55%, #f4f7f2); }
 #solar-dashboard .solar-route-sample {
@@ -70,7 +71,7 @@
 #solar-dashboard .solar-route-grid { --route-ink: #3f6279; --route-tint: #e5eef5; }
 #solar-dashboard .solar-route-map {
   display: grid; grid-template-columns: minmax(80px, .82fr) minmax(11px, .16fr) minmax(19px, .29fr) minmax(114px, 1.3fr);
-  grid-template-rows: repeat(3, minmax(51px, 1fr)); align-items: center; padding-top: 10px;
+  grid-template-rows: repeat(3, minmax(46px, 1fr)); align-items: center; padding-top: 6px;
 }
 #solar-dashboard .solar-route-source {
   grid-area: 1 / 1 / 4 / 2; padding: 12px; border-radius: 10px; border: 1px solid #eedab2;
@@ -141,7 +142,14 @@
 #solar-dashboard .solar-forecast-summary { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 4px 12px; }
 #solar-dashboard #solar-battery-forecast-time { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
 #solar-dashboard #solar-battery-forecast-rate:empty { display: none; }
-#solar-dashboard #solar-battery-forecast-chart { display: block; width: 100%; height: 96px; }
+#solar-dashboard .solar-battery-card { min-width: 0; }
+#solar-dashboard #solar-soc-gauge { display: block; width: min(52%, 130px); margin: 6px auto; color: var(--solar-battery-ink); }
+#solar-dashboard #solar-soc-gauge [hidden] { display: none; }
+#solar-dashboard #solar-battery-forecast-chart { display: block; width: 100%; height: 42px; }
+#solar-dashboard .solar-battery-metrics { display: grid; gap: 5px; text-align: center; }
+#solar-dashboard #solar-recharge-estimate:empty { display: none; }
+#solar-dashboard #solar-battery-forecast-chart[hidden] { display: none; }
+#solar-dashboard .solar-forecast-summary[hidden] { display: none; }
 #solar-dashboard #solar-battery-forecast-chart text { fill: var(--solar-muted); font: 11px "Segoe UI", system-ui, sans-serif; }
 #solar-dashboard #solar-battery-forecast-chart circle { fill: var(--solar-battery-ink); }
 #solar-dashboard .solar-forecast-gridline { stroke: #dcd1e6; }
@@ -192,6 +200,11 @@
 #solar-dashboard .solar-inverter-power dt { color: var(--solar-muted); font-size: 11px; }
 #solar-dashboard .solar-inverter-power dd { font-size: 1.4rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 #solar-dashboard .solar-inverter tbody tr:nth-child(odd) { background: var(--solar-soft); }
+#solar-dashboard #solar-overview[hidden] { display: none; }
+#solar-dashboard nav[aria-label="Dashboard sections"] { display: flex; gap: 8px; margin: 12px 0; }
+#solar-dashboard nav button[aria-pressed="true"] { background: var(--solar-soft); font-weight: 650; }
+#solar-dashboard #solar-control-values { display: grid; grid-template-columns: max-content auto; gap: 8px 20px; }
+#solar-dashboard #solar-control-values dd { margin: 0; font-weight: 650; }
 #solar-dashboard #solar-counter-note { margin-top: 8px; }
 
 @container solar-dashboard (max-width: 680px) {

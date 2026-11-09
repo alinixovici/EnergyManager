@@ -47,7 +47,11 @@
     if (!file || !file.size) return [];
     const header = await csvHeader(file);
     const start = Math.max(header.end, file.size - limit);
-    let text = await file.slice(start).text();
+    const chunks = [];
+    for (let offset = start; offset < file.size; offset += chunkSize) {
+      chunks.push(await file.slice(offset, Math.min(offset + chunkSize, file.size)).text());
+    }
+    let text = chunks.join('');
     if (start > header.end) text = text.slice(text.indexOf('\n') + 1);
     return text.split('\n').slice(0, -1).map(line => cells(line, header)).filter(Boolean).map(values => ({
       stamp: values[0],
@@ -61,11 +65,11 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function forecastStart(stamp) {
-    return new Date(stamp).getTime() - forecastWindow;
+  function forecastStart(stamp, windowMs = forecastWindow) {
+    return new Date(stamp).getTime() - windowMs;
   }
 
-  async function batteryForecast(file, precedingFile, latestRow, now = Date.now()) {
+  async function batteryForecast(file, precedingFile, latestRow, now = Date.now(), windowMs = forecastWindow, history) {
     if (!latestRow) return { state: 'missing' };
     const end = new Date(latestRow.stamp).getTime();
     if (!Number.isFinite(end) || now - end > maxSampleGap) return { state: 'stale' };
@@ -74,15 +78,16 @@
     if (current == null || current < 0 || current > 100 || power == null) return { state: 'missing' };
     if (Math.abs(power) < idleWatts) return { state: 'idle' };
     const target = power > 0 ? 20 : 100;
-    if (power > 0 ? current <= target : current >= target) return { state: 'reached', target };
+    if (power < 0 && current >= target) return { state: 'reached', target };
 
-    const start = forecastStart(latestRow.stamp);
+    const start = forecastStart(latestRow.stamp, windowMs);
     // A bounded read covers the window even at the one-second sampling rate.
-    const rows = await tail(file, 256 * 1024);
-    const earlier = precedingFile && (!rows.length || new Date(rows[0].stamp).getTime() > start)
-      ? await tail(precedingFile, 256 * 1024) : [];
+    const readSize = 256 * 1024 * Math.ceil(windowMs / forecastWindow);
+    const recent = history ?? await tail(file, readSize);
+    const rows = !history && precedingFile && (!recent.length || Date.parse(recent[0].stamp) > start)
+      ? [...await tail(precedingFile, readSize), ...recent] : recent;
     const samples = new Map();
-    for (const row of [...earlier, ...rows, latestRow]) {
+    for (const row of [...rows, latestRow]) {
       const at = new Date(row.stamp).getTime();
       const watts = row.number('PBat');
       const soc = row.number('SOC%');
@@ -93,7 +98,27 @@
     const sorted = [...samples.values()].sort((a, b) => a.at - b.at);
     const first = sorted.findLastIndex(sample => sample.at <= start);
     const window = first < 0 ? [] : sorted.slice(first);
-    if (window.length < 4 || window.some((sample, i) => i > 0 && sample.at - window[i - 1].at > maxSampleGap)) {
+    const minimumSamples = windowMs === 10 * 60000 ? 3 : 4;
+    if (window.length < minimumSamples || window.some((sample, i) => i > 0 && sample.at - window[i - 1].at > maxSampleGap)) {
+      if (!history) {
+        // Try older complete windows at one-minute steps, up to three hours back.
+        const direction = Math.sign(power);
+        const historySize = 4 * chunkSize;
+        const older = [...await tail(precedingFile, historySize), ...await tail(file, historySize)];
+        let next = end - 60000;
+        for (let i = older.length - 1; i >= 0; i--) {
+          const row = older[i];
+          const at = Date.parse(row.stamp);
+          if (at < end - 3 * 3600000) break;
+          if (at > next || Math.sign(row.number('PBat')) !== direction) continue;
+          next = at - 60000;
+          const prior = await batteryForecast(file, precedingFile, row, at, windowMs, older);
+          if (!Number.isFinite(prior.socPerHour) || Math.sign(prior.socPerHour) !== -direction) continue;
+          const hours = (target - current) / prior.socPerHour;
+          return { ...prior, current, target, hours, historyEnd: row.stamp,
+            state: hours > 0 ? 'ready' : 'reached' };
+        }
+      }
       return { state: 'short' };
     }
     if (window[0].at < start) {
@@ -117,7 +142,7 @@
       gross += (Math.abs(before.watts) + Math.abs(after.watts)) * duration;
       energy.push(net / 3600000000); // Watt-milliseconds to kWh.
     }
-    const average = net / forecastWindow;
+    const average = net / windowMs;
     if (Math.abs(average) < idleWatts || Math.sign(average) !== Math.sign(power) || Math.abs(net) < gross / 2) {
       return { state: 'mixed', average };
     }
@@ -134,9 +159,13 @@
       variance += difference ** 2;
     }
     const slope = covariance / variance;
-    const hours = (target - current) / (slope * average / 1000);
+    const socPerHour = slope * average / 1000;
+    if (slope < 0 && power > 0 && current <= target) {
+      return { state: 'reached', current, target, socPerHour };
+    }
+    const hours = (target - current) / socPerHour;
     if (!(slope < 0 && Number.isFinite(hours) && hours > 0)) return { state: 'flat', average };
-    return { state: 'ready', current, target, average, hours };
+    return { state: 'ready', current, target, average, hours, socPerHour };
   }
 
   // Search by byte offset, moving each boundary to a complete CSV row.

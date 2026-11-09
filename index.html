@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Energy Manager 4.6 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=460">
+  <title>Energy Manager 6.7 · alinix</title>
+  <link rel="stylesheet" href="./dashboard.css?v=607">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -43,7 +43,7 @@
         </div>
         <p id="solar-log-message" role="status"></p>
       </section>
-      <div class="solar-dashboard-grid">
+      <div class="solar-dashboard-grid" id="solar-overview">
         <section class="solar-card solar-routes-card" aria-labelledby="solar-flow-title">
           <div class="solar-section-heading">
             <h2 id="solar-flow-title">Power routes</h2>
@@ -90,10 +90,17 @@
         </section>
         <section class="solar-card solar-battery-card" aria-labelledby="solar-soc-title">
           <h2 id="solar-soc-title">Battery state of charge</h2>
-          <div class="solar-soc"><strong id="solar-battery-soc">—</strong><span class="solar-caption">SoC</span></div>
-          <div id="solar-soc-gauge" class="solar-soc-gauge" role="meter" aria-labelledby="solar-soc-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true"><span></span></div>
-          <div class="solar-gauge-scale" aria-hidden="true"><span>0%</span><span>100%</span></div>
-          <p class="solar-caption"><strong id="solar-battery-today">—</strong> <span id="solar-battery-energy-label">charged today</span></p>
+          <svg id="solar-soc-gauge" viewBox="0 0 112 76" role="meter" aria-labelledby="solar-soc-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
+            <defs><linearGradient id="solar-dial-colors"><stop offset="0%" stop-color="#dc303f"/><stop offset="50%" stop-color="#eab33b"/><stop offset="100%" stop-color="#53d66f"/></linearGradient></defs>
+            <path d="M12 57 A44 44 0 0 1 100 57" fill="none" stroke="url(#solar-dial-colors)" stroke-width="8" stroke-linecap="round"/>
+            <path id="solar-soc-reserve" d="M12 57 A44 44 0 0 1 100 57" fill="none" stroke="#101010" stroke-width="8" pathLength="100" hidden/>
+            <circle id="solar-soc-marker" r="4" fill="currentColor" stroke="#efeaf4" stroke-width="1.5" hidden/>
+            <g fill="currentColor" text-anchor="middle"><text id="solar-battery-soc" x="56" y="54" font-size="25" font-weight="700">—</text><text x="12" y="74" font-size="10">0%</text><text x="100" y="74" font-size="10">100%</text></g>
+          </svg>
+          <p class="solar-caption solar-battery-metrics">
+            <span><strong id="solar-battery-today">—</strong> <span id="solar-battery-energy-label">charged today</span></span>
+            <span id="solar-recharge-estimate" role="status"></span>
+          </p>
           <div class="solar-battery-forecast">
             <div class="solar-forecast-summary">
               <div>
@@ -102,7 +109,8 @@
               </div>
               <p id="solar-battery-forecast-rate" class="solar-caption"></p>
             </div>
-            <svg id="solar-battery-forecast-chart" role="img" aria-label="Linear battery forecast" hidden></svg>
+            <svg id="solar-battery-forecast-chart" role="img" aria-label="Battery forecast time range" hidden></svg>
+            <p id="solar-forecast-series" class="solar-caption"></p>
           </div>
         </section>
         <section class="solar-card solar-history" aria-labelledby="solar-history-title">
@@ -167,9 +175,9 @@
     </div>
   </section>
 </main>
-<script src="./dashboard-data.js?v=460"></script>
+<script src="./dashboard-data.js?v=607"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=460"></script>
-<script src="./dashboard.js?v=460"></script>
+<script src="./cloud.js?v=607"></script>
+<script src="./dashboard.js?v=607"></script>
 </body>
 </html>

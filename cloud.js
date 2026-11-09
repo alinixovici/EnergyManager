@@ -77,12 +77,13 @@
       const end = new Date(latest.time).getTime();
       const [history, recent] = await Promise.all([
         range(day.toISOString(), new Date(+day + 86400000).toISOString()),
-        range(new Date(end - 21 * 60000).toISOString(), new Date(end + 1).toISOString()),
+        range(new Date(end - 246 * 60000).toISOString(), new Date(end + 1).toISOString()),
       ]);
       const month = stamp(latest).slice(0, 7);
       const previous = recent.filter(row => stamp(row).slice(0, 7) !== month);
       return {
         date, system: record(latest), meter: record(latest),
+        reserve: number(latest, 'battery_soc_reserve') ?? 4,
         selectedFile: history.length ? systemFile(history, date.slice(0, 7)) : undefined,
         latestFile: systemFile(recent.filter(row => stamp(row).startsWith(month)), month),
         previousFile: previous.length ? systemFile(previous, stamp(previous[0]).slice(0, 7)) : undefined,

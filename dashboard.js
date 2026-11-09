@@ -43,6 +43,9 @@
   let pendingDateRefresh = false;
   let forecast = { state: 'missing' };
   let forecastRequest;
+  const forecastWindows = [10, 30, 60];
+  let forecastResults = new Map();
+  let inverterSettings;
   let forecastStamp;
   let forecastChecked = 0;
 
@@ -75,7 +78,11 @@
     write('battery-soc', validSoc ? `${Math.round(soc)}%` : '—');
     gauge.setAttribute('aria-hidden', String(!validSoc));
     gauge.setAttribute('aria-valuenow', validSoc ? soc : 0);
-    gauge.style.setProperty('--solar-soc-level', `${validSoc ? soc : 0}%`);
+    const angle = Math.PI * (1 - (validSoc ? soc : 0) / 100);
+    const marker = id('soc-marker');
+    marker.toggleAttribute('hidden', !validSoc);
+    marker.setAttribute('cx', 56 + 44 * Math.cos(angle));
+    marker.setAttribute('cy', 57 - 44 * Math.sin(angle));
     write('pv-state', stateOf(pv, 'Generating', 'Idle'));
     write('battery-state', stateOf(battery, 'Discharging', 'Charging'));
     write('grid-state', stateOf(grid, 'Exporting', 'Importing'));
@@ -115,25 +122,63 @@
     return wholeHours ? `${wholeHours} h ${minutes % 60} min` : `${minutes} min`;
   }
 
+  function forecastClock(hours) {
+    const at = new Date(Date.parse(forecastStamp) + hours * 3600000);
+    if (!Number.isFinite(at.getTime())) return '';
+    return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
+  }
+
   function drawForecast() {
-    const width = forecastChart.clientWidth;
-    if (forecast.state !== 'ready' || !width) return;
-    const { current, target, hours } = forecast;
-    const height = 96;
-    const left = 40, right = width - 14;
-    const y = percent => 71 - percent * .57;
-    const label = (x, at, text, anchor) => svg('text', { x, y: at, 'text-anchor': anchor }, text);
-    forecastChart.setAttribute('viewBox', `0 0 ${width} ${height}`);
     forecastChart.replaceChildren();
-    for (const tick of [...new Set([0, 100, target])]) {
-      forecastChart.append(svg('line', { x1: left, x2: right, y1: y(tick), y2: y(tick),
-        class: tick === target ? 'solar-forecast-target' : 'solar-forecast-gridline' }),
-        label(left - 6, y(tick) + 4, `${tick}%`, 'end'));
+    const times = [...forecastResults.values()].map(result => {
+      const target = result.socPerHour < 0 ? rechargeThreshold() : 100;
+      return (target - result.current) / result.socPerHour;
+    }).filter(hours => Number.isFinite(hours) && hours > 0).sort((a, b) => a - b);
+    forecastChart.toggleAttribute('hidden', !times.length);
+    if (!times.length) return;
+    const width = forecastChart.clientWidth;
+    if (!width) return;
+    const min = times[0], max = times.at(-1);
+    const mean = times.reduce((sum, hours) => sum + hours, 0) / times.length;
+    const left = 20, right = width - 20;
+    const now = new Date();
+    const elapsed = (now.getTime() - Date.parse(forecastStamp)) / 3600000;
+    const span = Math.max(max - elapsed, 0.001);
+    const x = hours => left + (right - left) * Math.max(0, hours - elapsed) / span;
+    const currentTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    const ticks = [
+      ['Now', currentTime, left],
+      ['Min', forecastClock(min), x(min)],
+      ['Avg', forecastClock(mean), x(mean)],
+      ['Max', forecastClock(max), x(max)],
+    ];
+    forecastChart.setAttribute('viewBox', `0 0 ${width} 42`);
+    forecastChart.setAttribute('aria-label', ticks.map(([name, time]) => name + ' ' + time).join(', '));
+    forecastChart.append(svg('line', { x1: left, x2: right, y1: 22, y2: 22,
+      stroke: '#d9cde2', 'stroke-width': 3, 'stroke-linecap': 'round' }),
+      svg('line', { x1: x(min), x2: x(max), y1: 22, y2: 22,
+        stroke: 'var(--solar-battery-ink)', opacity: .45, 'stroke-width': 6, 'stroke-linecap': 'round' }));
+    let previousLabel;
+    for (const [name, time, position] of ticks) {
+      const average = name === 'Avg';
+      forecastChart.append(svg('line', { x1: position, x2: position,
+        y1: average ? 15 : 22, y2: average ? 26 : 29,
+        stroke: 'var(--solar-battery-ink)', 'stroke-width': 1.5 }));
+      if (!average && previousLabel && Math.abs(position - previousLabel.position) < 32) {
+        if (time === previousLabel.time) continue;
+        previousLabel.element.setAttribute('text-anchor', 'end');
+        const element = svg('text', { x: position + 2, y: 40,
+          'text-anchor': position + 34 <= width ? 'start' : 'end' }, time);
+        if (position + 34 > width) previousLabel.element.setAttribute('x', position - 34);
+        forecastChart.append(element);
+        previousLabel = { position, time, element };
+      } else {
+        const element = svg('text', { x: position, y: average ? 11 : 40, 'text-anchor': 'middle',
+          style: average ? 'font-weight:bold' : '' }, time);
+        forecastChart.append(element);
+        if (!average) previousLabel = { position, time, element };
+      }
     }
-    forecastChart.append(svg('line', { x1: left, x2: right, y1: y(current), y2: y(target), class: 'solar-forecast-line' }),
-      svg('circle', { cx: left, cy: y(current), r: 3.5 }), svg('circle', { cx: right, cy: y(target), r: 3.5 }),
-      label(left, 89, 'Now', 'start'), label(right, 89, `In ${forecastDuration(hours)}`, 'end'));
-    forecastChart.setAttribute('aria-label', `Linear battery forecast from ${Math.round(current)}% to ${target}% in ${forecastDuration(hours)}.`);
   }
 
   function showForecast(result) {
@@ -143,8 +188,8 @@
       missing: 'Waiting for battery readings.',
       stale: 'The latest battery reading is too old for a live estimate.',
       idle: 'Battery idle. The forecast appears when charging or discharging resumes and there is a clear trend.',
-      reached: `Battery is already at or beyond ${result.target}%.`,
-      short: 'Waiting for 15 minutes of readings at 5-minute intervals or faster.',
+      reached: '',
+      short: 'Waiting for sufficient recent battery readings.',
       mixed: 'Recent battery power changed direction or is too low for an estimate.',
       flat: 'Recent SoC readings don’t show a clear trend yet.',
       unavailable: 'Could not read recent battery data.',
@@ -154,22 +199,27 @@
     if (summary.textContent !== title) summary.textContent = title;
     id('battery-forecast-time').hidden = !ready;
     write('battery-forecast-time', ready ? forecastDuration(result.hours) : '');
-    write('battery-forecast-rate', ready ? `${flowPower(result.average)} avg · Last 15 min` : '');
-    if (ready) forecastChart.removeAttribute('hidden');
-    else forecastChart.setAttribute('hidden', '');
-    if (ready) drawForecast();
+    write('battery-forecast-rate', '');
+    showRechargeEstimate();
+    const hasCurves = [...forecastResults.values()].some(item => Number.isFinite(item.socPerHour));
+    forecastChart.toggleAttribute('hidden', !hasCurves);
+    id('forecast-series').hidden = !hasCurves;
+    summary.closest('.solar-forecast-summary').hidden = !title || ready;
+    if (hasCurves) drawForecast();
   }
 
   function resetForecast(state = 'missing') {
     forecastRequest = forecastStamp = undefined;
     forecastChecked = 0;
+    forecastResults.clear();
     showForecast({ state });
   }
 
   function refreshForecast(system, latestFile, pairs, serial) {
     if (!system) { resetForecast(); return; }
     const now = Date.now();
-    const start = data.forecastStart(system.stamp);
+    const windowMs = 60 * 60000;
+    const start = data.forecastStart(system.stamp, windowMs + 3 * 3600000);
     if (!Number.isFinite(start)) { resetForecast(); return; }
     if (now - new Date(system.stamp).getTime() > forecastMaxAge) {
       if (forecast.state !== 'stale') resetForecast('stale');
@@ -180,12 +230,25 @@
     const startMonth = new Date(start).toISOString().slice(0, 7);
     const preceding = startMonth !== system.stamp.slice(0, 7)
       ? pairs.find(pair => pair.serial === serial && pair.month === startMonth)?.system : undefined;
-    const request = getFile(preceding).then(file => data.batteryForecast(latestFile, file, system, now));
+    const request = getFile(preceding).then(file => Promise.all(forecastWindows.map(async minutes =>
+      [minutes, await data.batteryForecast(latestFile, file, system, now, minutes * 60000)])));
     forecastRequest = request;
-    request.then(result => {
+    request.then(results => {
       if (forecastRequest !== request) return;
       forecastStamp = system.stamp;
-      showForecast(result);
+      forecastResults = new Map(results);
+      const valid = results.map(([, result]) => result).filter(result => Number.isFinite(result.socPerHour));
+      const first = valid[0];
+      if (!first) {
+        showForecast(results[0][1]);
+      } else {
+        const meanDuration = target => valid.reduce((sum, result) =>
+          sum + (target - result.current) / result.socPerHour, 0) / valid.length;
+        const hours = meanDuration(first.target);
+        showForecast({ ...first, hours,
+          socPerHour: hours > 0 ? (first.target - first.current) / hours : first.socPerHour,
+          meanDuration });
+      }
     }).catch(() => {
       if (forecastRequest === request) showForecast({ state: 'unavailable' });
     }).finally(() => {
@@ -447,14 +510,17 @@
       if (!result) return;
       const { system, meter, latestFile, previousFile, selectedFile, date } = result;
       showCurrent('FD2324F695', system, meter);
-      showForecast(await data.batteryForecast(latestFile, previousFile, system));
+      inverterSettings = { reserve: result.reserve };
+      const previous = previousFile ? [{ serial: 'FD2324F695', month: previousFile.name.slice(-11, -4), system: previousFile }] : [];
+      refreshForecast(system, latestFile, previous, 'FD2324F695');
+      showRechargeEstimate();
       dateInput.max = system?.stamp.slice(0, 10) ?? utcDate();
       if (!dateInput.value || dateInput.value > dateInput.max) setChartDate(date);
       if (dateInput.value !== date) return;
       id('next-day').disabled = date >= dateInput.max;
       cache = selectedFile ? await data.history(selectedFile, date) : undefined;
       empty.textContent = 'No readings for this date.';
-      drawChart(true);
+      drawChart();
       write('data-status', system ? 'Supabase · Latest sample ' + displayDate(system.stamp.slice(0, 10)) + ' ' + system.stamp.slice(11, 19) + ' UTC' : 'No cloud readings yet.');
       write('cloud-status', 'Connected to Supabase · Read-only dashboard');
     } catch (error) {
@@ -629,6 +695,128 @@
   id('previous-day').addEventListener('click', () => changeDate(-1));
   id('next-day').addEventListener('click', () => changeDate(1));
 
+  function rechargeThreshold() {
+    const reserve = inverterSettings?.reserve;
+    return Number.isInteger(reserve) && reserve >= 0 && reserve < 100 ? reserve + 1 : undefined;
+  }
+
+  function showRechargeEstimate() {
+    const reserve = rechargeThreshold();
+    id('soc-reserve').setAttribute('stroke-dasharray', `${reserve ?? 0} 100`);
+    id('soc-reserve').toggleAttribute('hidden', reserve == null);
+    const charging = forecast?.socPerHour > 0;
+    const target = charging ? 100 : reserve;
+    const output = id('recharge-estimate');
+    output.replaceChildren();
+    if (target == null || !Number.isFinite(forecast?.socPerHour) ||
+        (charging ? forecast.current >= target : forecast.current <= target)) return;
+    const hours = forecast.meanDuration?.(target) ?? (target - forecast.current) / forecast.socPerHour;
+    const clock = forecastClock(hours);
+    if (!clock) return;
+    const time = document.createElement('strong');
+    time.textContent = clock;
+    output.append(`Battery estimated ${charging ? 'full' : 'empty'} (SoC ${target}%) at `, time);
+  }
+  const registerDescriptions = {
+    0: 'Inverter model type code',
+    21: 'ARM firmware version code',
+    94: 'First charge slot start (HHMM)',
+    95: 'First charge slot end (HHMM)',
+    96: 'Battery charging enabled (0 or 1)',
+    97: 'Battery low-voltage protection threshold (0.01 V per count)',
+    98: 'Battery high-voltage protection threshold (0.01 V per count)',
+    109: 'Battery management system reads enabled (0 or 1)',
+    110: 'Battery state-of-charge reserve (%)',
+    111: 'Battery charge rate limit (C-rate × 100)',
+    112: 'Battery discharge rate limit (C-rate × 100)',
+    114: 'Minimum discharge state of charge (%)',
+    116: 'Configured charge target (%)',
+    118: 'Second discharge slot stop threshold (%)',
+    120: 'First discharge slot stop threshold (%)',
+  };
+
+  function showConfigRegisters(banks = {}) {
+    const sections = [0, 60, 120, 240].map(base => {
+      const group = document.createElement('details');
+      const title = document.createElement('summary');
+      const values = banks[base];
+      title.textContent = 'Holding registers ' + base + '–' + (base + 59) +
+        (values ? '' : ' · Unavailable');
+      group.append(title);
+      if (Array.isArray(values)) {
+        const list = document.createElement('ul');
+        for (const [offset, value] of values.entries()) {
+          const address = base + offset;
+          const row = document.createElement('li');
+          row.textContent = 'HR ' + address + ' = ' + value + ' · ' +
+            (registerDescriptions[address] ?? 'Raw value, meaning unverified for this model');
+          list.append(row);
+        }
+        group.append(list);
+      }
+      return group;
+    });
+    id('control-registers').replaceChildren(...sections);
+  }
+  const retrieveSettings = id('retrieve-settings');
+  async function loadInverterSettings() {
+    if (retrieveSettings.disabled) return;
+    retrieveSettings.disabled = true;
+    try {
+      const response = await fetch(new URL('readings.php', location.href), {
+        headers: { 'X-Solar-Logger': 'inverter-settings' }, cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) throw new Error('Settings request failed');
+      const snapshot = await response.json();
+      if (snapshot.state === 'waiting') {
+        inverterSettings = undefined;
+        showRechargeEstimate();
+        drawForecast();
+        id('control-values').replaceChildren();
+        id('control-registers').replaceChildren();
+        write('control-status', 'Waiting for the logger to read the inverter settings.');
+        return;
+      }
+      inverterSettings = snapshot;
+      showRechargeEstimate();
+      drawForecast();
+      showConfigRegisters(snapshot.banks);
+      const fields = [
+        ['Discharge cutoff', snapshot.cutoff],
+        ['Battery SoC reserve', snapshot.reserve],
+        ['Charge target', snapshot.charge_target],
+      ];
+      id('control-values').replaceChildren(...fields.flatMap(([label, value]) => {
+        const term = document.createElement('dt');
+        const detail = document.createElement('dd');
+        term.textContent = label;
+        detail.textContent = Number.isInteger(value) && value >= 0 && value <= 100 ? value + '%' : 'Unavailable';
+        return [term, detail];
+      }));
+      write('control-status', 'Last read from inverter: ' + snapshot.checked + ' · Read-only');
+    } catch {
+      write('control-status', inverterSettings
+        ? 'Could not refresh. Showing cached settings from ' + inverterSettings.checked
+        : 'Could not retrieve inverter settings.');
+    } finally {
+      retrieveSettings.disabled = false;
+    }
+  }
+  retrieveSettings?.addEventListener('click', loadInverterSettings);
+  if (retrieveSettings) loadInverterSettings();
+  const panelButtons = [...root.querySelectorAll('[data-solar-panel]')];
+  for (const button of panelButtons) {
+    button.addEventListener('click', () => {
+      for (const item of panelButtons) {
+        const selected = item === button;
+        item.setAttribute('aria-pressed', String(selected));
+        id(item.dataset.solarPanel).hidden = !selected;
+      }
+      if (button.dataset.solarPanel === 'control') loadInverterSettings();
+      if (button.dataset.solarPanel === 'overview') drawChart(true);
+    });
+  }
   window.energyCloud.start(() => refresh(true));
   const timer = setInterval(() => {
     if (!root.isConnected) { clearInterval(timer); chartObserver.disconnect(); }
