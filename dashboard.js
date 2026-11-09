@@ -20,9 +20,6 @@
   const xRangeButtons = [...root.querySelectorAll('.solar-x-range')];
   const minPowerSpan = 50;
   const forecastMaxAge = 6 * 60000;
-  const fileInput = id('log-files');
-  const openButton = id('open-logs');
-  const configuredButton = id('use-configured');
   const manageButton = id('manage-logs');
   const logManager = id('log-manager');
   const logMonth = id('log-month');
@@ -32,11 +29,8 @@
     ['Grid import', '#FF0000', true], ['Home demand', '#4EA72E', true], ['PV power', '#8b590b'], ['Battery SoC', '#37404a'],
   ];
   const checks = [];
-  let folder;
-  let snapshots;
   let sourceSerial;
   let sourcePath;
-  let useNas = true;
   let nasSource;
   let managedFiles = [];
   let recycling = false;
@@ -47,7 +41,6 @@
   let chartDrag;
   let busy = false;
   let pendingDateRefresh = false;
-  let fallbackPicker = false;
   let forecast = { state: 'missing' };
   let forecastRequest;
   let forecastStamp;
@@ -86,17 +79,17 @@
     write('pv-state', stateOf(pv, 'Generating', 'Idle'));
     write('battery-state', stateOf(battery, 'Discharging', 'Charging'));
     write('grid-state', stateOf(grid, 'Exporting', 'Importing'));
-    write('pv-today', energy(meter?.number('PV Gen Today')));
-    write('home-today', energy(meter?.number('Consumption Today')));
+    write('pv-today', energy(meter?.number('PV Gen Today'), '\u00a0kWh'));
+    write('home-today', energy(meter?.number('Consumption Today'), '\u00a0kWh'));
     write('battery-energy-label', battery > 0 ? 'discharged today' : 'charged today');
     write('battery-today', energy(meter?.number(battery > 0 ? 'Batt Discharge Today' : 'Batt Charge Today'), ' kWh'));
     write('inverter-serial', serial ?? '—');
-    write('inverter-today', energy(meter?.number('Combined Gen Today')));
-    write('inverter-total', energy(meter?.number('Combined Gen Total')));
-    write('inverter-import-total', energy(meter?.number('Import Total')));
-    write('inverter-export-total', energy(meter?.number('Export Total')));
-    write('inverter-import-today', energy(meter?.number('Import Today')));
-    write('inverter-export-today', energy(meter?.number('Export Today')));
+    write('inverter-today', energy(meter?.number('Combined Gen Today'), '\u00a0kWh'));
+    write('inverter-total', energy(meter?.number('Combined Gen Total'), '\u00a0kWh'));
+    write('inverter-import-total', energy(meter?.number('Import Total'), '\u00a0kWh'));
+    write('inverter-export-total', energy(meter?.number('Export Total'), '\u00a0kWh'));
+    write('inverter-import-today', energy(meter?.number('Import Today'), '\u00a0kWh'));
+    write('inverter-export-today', energy(meter?.number('Export Today'), '\u00a0kWh'));
     write('inverter-import-now', flowPower(grid == null ? null : Math.max(0, -grid)));
     write('inverter-export-now', flowPower(grid == null ? null : Math.max(0, grid)));
     write('flow-pv-power', flowPower(pv));
@@ -307,36 +300,30 @@
   }
 
   async function files() {
-    if (useNas) {
-      const manifest = await (await readNas()).json();
-      if (nasSource !== manifest.source) {
-        cache = undefined;
-        resetForecast();
-        showCurrent();
-        drawChart(true);
-        nasSource = manifest.source;
-      }
-      sourcePath = manifest.path;
-      sourceSerial = manifest.serial;
-      updateLogMonths(manifest.files);
-      write('source-note', '');
-      return manifest.files.map(file => ({
-        ...file,
-        slice(start, end = file.size) {
-          const length = Math.min(end, file.size) - start;
-          const parameters = { file: file.name, source: manifest.source, identity: file.identity, start, length };
-          const slice = () => length > 0 ? readNas(parameters) : Promise.resolve(new Response());
-          return {
-            async text() { return (await slice()).text(); },
-            async arrayBuffer() { return (await slice()).arrayBuffer(); },
-          };
-        },
-      }));
+    const manifest = await (await readNas()).json();
+    if (nasSource !== manifest.source) {
+      cache = undefined;
+      resetForecast();
+      showCurrent();
+      drawChart(true);
+      nasSource = manifest.source;
     }
-    if (!folder) return snapshots ?? [];
-    const entries = [];
-    for await (const handle of folder.values()) if (handle.kind === 'file') entries.push(handle);
-    return entries;
+    sourcePath = manifest.path;
+    sourceSerial = manifest.serial;
+    updateLogMonths(manifest.files);
+    write('source-note', '');
+    return manifest.files.map(file => ({
+      ...file,
+      slice(start, end = file.size) {
+        const length = Math.min(end, file.size) - start;
+        const parameters = { file: file.name, source: manifest.source, identity: file.identity, start, length };
+        const slice = () => length > 0 ? readNas(parameters) : Promise.resolve(new Response());
+        return {
+          async text() { return (await slice()).text(); },
+          async arrayBuffer() { return (await slice()).arrayBuffer(); },
+        };
+      },
+    }));
   }
 
   const getFile = async entry => entry?.kind === 'file' ? entry.getFile() : entry;
@@ -394,7 +381,7 @@
   }
 
   function updateLogControls() {
-    manageButton.disabled = !useNas || !nasSource;
+    manageButton.disabled = !nasSource;
     logMonth.disabled = recycling || !managedFiles.length;
     recycleButton.disabled = recycling || !logMonth.value;
   }
@@ -421,7 +408,7 @@
   recycleButton.addEventListener('click', async () => {
     const month = logMonth.value;
     const selected = managedFiles.filter(file => monthOf(file) === month);
-    if (recycling || !useNas || !nasSource || !selected.length) return;
+    if (recycling || !nasSource || !selected.length) return;
     const nextSample = month === utcDate().slice(0, 7) ? '\n\nLogging will start fresh CSVs for this month on the next sample.' : '';
     if (!window.confirm('Move the ' + monthLabel(month) + ' CSVs from ' + sourcePath +
         ' to the WD Recycle Bin?' + nextSample)) return;
@@ -444,8 +431,6 @@
   });
 
   function updateSourceButtons() {
-    openButton.disabled = busy;
-    configuredButton.disabled = busy;
   }
 
   async function refresh(dateChanged = false) {
@@ -453,7 +438,7 @@
       pendingDateRefresh ||= dateChanged;
       return;
     }
-    if (!data || !useNas && !folder && !snapshots) return;
+    if (!data) return;
     busy = true;
     updateSourceButtons();
     try {
@@ -644,56 +629,10 @@
   id('previous-day').addEventListener('click', () => changeDate(-1));
   id('next-day').addEventListener('click', () => changeDate(1));
 
-  function setSource(directory, selectedFiles) {
-    useNas = false;
-    nasSource = undefined;
-    logManager.hidden = true;
-    manageButton.setAttribute('aria-expanded', 'false');
-    folder = directory;
-    snapshots = selectedFiles;
-    sourceSerial = undefined;
-    sourcePath = undefined;
-    updateLogMonths([]);
-    write('log-message', '');
-    cache = undefined;
-    resetForecast();
-    setChartDate('');
-    drawChart(true);
-    write('source-note', '');
-    refresh();
-  }
-
-  configuredButton.addEventListener('click', () => {
-    useNas = true;
-    nasSource = undefined;
-    folder = undefined;
-    snapshots = undefined;
-    refresh();
-  });
   window.energyCloud.start(() => refresh(true));
-
-  openButton.addEventListener('click', async () => {
-    if (fallbackPicker || typeof window.showDirectoryPicker !== 'function') {
-      fileInput.click();
-      return;
-    }
-    try {
-      setSource(await window.showDirectoryPicker({ id: 'solar-logger-logs', mode: 'read' }));
-    } catch (error) {
-      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
-        fallbackPicker = true;
-        write('data-status', 'Folder streaming is unavailable. Click Open another folder again to load a snapshot.');
-      } else if (error.name !== 'AbortError') write('data-status', error.message || 'Could not open the folder.');
-    }
-  });
-  fileInput.addEventListener('change', () => {
-    const selectedFiles = [...fileInput.files].filter(file => file.webkitRelativePath.split('/').length <= 2);
-    if (selectedFiles.length) setSource(undefined, selectedFiles);
-    fileInput.value = '';
-  });
   const timer = setInterval(() => {
     if (!root.isConnected) { clearInterval(timer); chartObserver.disconnect(); }
-    else if ((useNas || folder) && !document.hidden) refresh();
+    else if (!document.hidden) refresh();
   }, 60000);
   if (!window.energyCloud && id('cloud-status')) {
     refreshCloudStatus();

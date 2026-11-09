@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Energy Manager · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=430">
+  <title>Energy Manager 4.6 · alinix</title>
+  <link rel="stylesheet" href="./dashboard.css?v=460">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -30,11 +30,8 @@
           <p id="solar-source-note" role="status"></p>
         </div>
         <div class="solar-source-actions" hidden>
-          <button type="button" id="solar-use-configured">Use configured folder</button>
-          <button type="button" id="solar-open-logs">Open another folder</button>
           <button type="button" id="solar-manage-logs" aria-expanded="false" aria-controls="solar-log-manager" disabled>Manage logs</button>
         </div>
-        <input type="file" id="solar-log-files" webkitdirectory multiple hidden>
       </div>
       <section class="solar-card solar-log-manager" id="solar-log-manager" aria-labelledby="solar-log-title" hidden>
         <h2 id="solar-log-title">Monthly log files</h2>
@@ -170,9 +167,9 @@
     </div>
   </section>
 </main>
-<script src="./dashboard-data.js?v=420"></script>
+<script src="./dashboard-data.js?v=460"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js"></script>
-<script src="./dashboard.js"></script>
+<script src="./cloud.js?v=460"></script>
+<script src="./dashboard.js?v=460"></script>
 </body>
 </html>
