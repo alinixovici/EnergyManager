@@ -62,8 +62,8 @@
           form.hidden = false;
         }
       }
-      form.elements.url.value = localStorage.getItem(prefix + 'url') || '';
-      form.elements.key.value = localStorage.getItem(prefix + 'key') || '';
+      form.elements.url.value = 'https://wkxhejzyudeqevnluxeo.supabase.co';
+      form.elements.key.value = 'sb_publishable_pK2i-3IoxD6chk1kurQ-Xg_z8afauB7';
       form.onsubmit = event => { event.preventDefault(); connect(); };
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
