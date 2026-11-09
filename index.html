@@ -1,7 +1,178 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Energy Manager Cloud</title><link rel="stylesheet" href="./style.css"></head>
-<body><main id="app"><header class="top"><div><div class="brand"><span class="brandmark">✦</span><span>alinix</span></div><div class="strap">LOCAL ENERGY MANAGEMENT</div><h1>Energy overview</h1><p id="connection">Cloud dashboard</p></div><button id="logout" class="button ghost" hidden>Sign out</button></header>
-<section id="setup" class="panel setup"><h2>Connect your Supabase project</h2><p>Enter your project URL and publishable key. These values stay in this browser.</p><label>Supabase project URL<input id="project-url" placeholder="https://your-project.supabase.co"></label><label>Publishable API key<input id="project-key" type="password" placeholder="sb_publishable_…"></label><button id="save-project" class="button primary">Save connection</button><p id="setup-error" class="error" role="alert"></p></section>
-<section id="login" class="panel setup" hidden><h2>Sign in</h2><p>Use the read-only Supabase account for your Energy Manager data.</p><label>Email<input id="email" type="email" autocomplete="username"></label><label>Password<input id="password" type="password" autocomplete="current-password"></label><button id="sign-in" class="button primary">Sign in</button><p id="login-error" class="error" role="alert"></p></section>
-<section id="dashboard" hidden><div class="toolbar"><label>Date<input id="date" type="date"></label><button id="refresh" class="button ghost">Refresh</button></div><div class="route-grid"><section class="panel routes"><div class="section-title"><h2>Power routes</h2><span class="live"><i></i>Latest reading</span></div><div class="routes-body"><div class="solar"><span class="eyebrow">☀ Solar generation</span><strong id="pv-now">—</strong><span class="tag">Generating</span></div><div class="arrows"><span>➜</span><span>➜</span><span>➜</span></div><div class="route-list"><div class="route home"><span class="route-icon">⌂</span><span><b>Home demand</b><small id="home-now">—</small></span></div><div class="route battery"><span class="route-icon">▣</span><span><b>Battery</b><small id="battery-state">—</small></span><strong id="battery-now">—</strong></div><div class="route grid"><span class="route-icon">⇄</span><span><b>Grid</b><small id="grid-state">—</small></span><strong id="grid-now">—</strong></div></div></div></section><section class="panel soc"><div class="section-title"><h2>Battery state of charge</h2><span id="soc-value">—</span></div><div class="progress"><span id="soc-bar"></span></div><div class="scale"><span>0%</span><span>100%</span></div><p id="soc-detail">—</p><div class="forecast"><strong id="forecast-time">—</strong><span id="forecast-label">Waiting for recent battery readings</span></div><svg id="forecast-chart" viewBox="0 0 500 110" role="img" aria-label="Battery forecast"></svg></section></div>
-<section class="panel history"><div class="section-title"><div><h2>Daily power history</h2><p>One-minute averages · UTC</p></div><div class="checks"><label><input type="checkbox" data-series="home" checked>Home</label><label><input type="checkbox" data-series="pv" checked>PV</label><label><input type="checkbox" data-series="battery" checked>Battery</label><label><input type="checkbox" data-series="grid" checked>Grid</label><label><input type="checkbox" data-series="soc" checked>SoC</label></div></div><div class="chart-wrap"><svg id="history-chart" viewBox="0 0 1000 360" role="img" aria-label="Daily power history chart"></svg></div></section><section class="panel inverter"><div><h2>My inverter</h2><p id="serial">—</p></div><div class="metric-grid"><div><span>Energy today</span><b id="energy-today">—</b></div><div><span>Grid import today</span><b id="import-today">—</b></div><div><span>Grid export today</span><b id="export-today">—</b></div><div><span>Lifetime inverter output</span><b id="energy-total">—</b></div></div></section><p id="cloud-status" class="cloud-status"></p></section></main><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="./app.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Energy Manager · alinix</title>
+  <link rel="stylesheet" href="./dashboard.css?v=430">
+</head>
+<body class="solar-dashboard-page">
+<main id="solar-console">
+  <form id="cloud-setup" class="solar-card" hidden>
+    <h2>Connect your Supabase project</h2>
+    <p><label>Supabase project URL <input name="url" type="url" required></label></p>
+    <p><label>Publishable API key <input name="key" required></label></p>
+    <button type="submit">Save connection</button>
+    <p id="cloud-error" role="alert"></p>
+  </form>
+  <section hidden id="solar-dashboard" aria-label="Inverter dashboard">
+    <header class="solar-app-bar">
+      <button id="solar-back" type="button">Connection settings</button>
+      <strong>Energy Manager</strong>
+    </header>
+    <div class="solar-content">
+      <div class="solar-toolbar">
+        <div>
+          <div class="solar-brand" aria-label="alinix"><span class="solar-brand-mark" aria-hidden="true">☀</span><span>alinix</span></div>
+          <p class="solar-kicker">Local energy management</p>
+          <h1>Energy overview</h1>
+          <p id="solar-data-status" role="status">Waiting for cloud readings.</p>
+          <p id="solar-source-note" role="status"></p>
+        </div>
+        <div class="solar-source-actions" hidden>
+          <button type="button" id="solar-use-configured">Use configured folder</button>
+          <button type="button" id="solar-open-logs">Open another folder</button>
+          <button type="button" id="solar-manage-logs" aria-expanded="false" aria-controls="solar-log-manager" disabled>Manage logs</button>
+        </div>
+        <input type="file" id="solar-log-files" webkitdirectory multiple hidden>
+      </div>
+      <section class="solar-card solar-log-manager" id="solar-log-manager" aria-labelledby="solar-log-title" hidden>
+        <h2 id="solar-log-title">Monthly log files</h2>
+        <p id="solar-log-folder"></p>
+        <div class="solar-log-actions">
+          <label for="solar-log-month">Month</label>
+          <select id="solar-log-month" disabled></select>
+          <button type="button" id="solar-recycle-month" disabled>Move CSVs to Recycle Bin</button>
+        </div>
+        <p id="solar-log-message" role="status"></p>
+      </section>
+      <div class="solar-dashboard-grid">
+        <section class="solar-card solar-routes-card" aria-labelledby="solar-flow-title">
+          <div class="solar-section-heading">
+            <h2 id="solar-flow-title">Power routes</h2>
+            <span class="solar-route-sample">Latest reading</span>
+          </div>
+          <div class="solar-route-map">
+            <dl class="solar-route-source solar-route-sun">
+              <dt>
+                <span class="solar-route-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M7 15a5 5 0 0 1 10 0M12 4v3M4 7l2 2m14-2-2 2M2 13h2m16 0h2"/></svg></span>
+                <span>Solar generation</span>
+              </dt>
+              <dd id="solar-flow-pv-power">—</dd>
+              <dd id="solar-pv-state" class="solar-route-state"></dd>
+            </dl>
+            <span class="solar-route-bus" aria-hidden="true"></span>
+            <span class="solar-route-line solar-route-feed solar-route-sun" id="solar-flow-pv" aria-hidden="true"></span>
+            <span class="solar-route-line solar-route-home" id="solar-flow-home" aria-hidden="true"></span>
+            <span class="solar-route-line solar-route-battery" id="solar-flow-battery" aria-hidden="true"></span>
+            <span class="solar-route-line solar-route-grid" id="solar-flow-grid" aria-hidden="true"></span>
+            <dl class="solar-route-destinations">
+              <div class="solar-route-home">
+                <dt>
+                  <span class="solar-route-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M6.5 10.5V20h11v-9.5M10 20v-5h4v5"/></svg></span>
+                  <span>Home demand</span>
+                </dt>
+                <dd id="solar-flow-home-power">—</dd>
+              </div>
+              <div class="solar-route-battery">
+                <dt>
+                  <span class="solar-route-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="16" height="10" rx="2"/><path d="M21 10v4M7 12h4"/></svg></span>
+                  <span>Battery <span id="solar-battery-state" class="solar-route-state"></span></span>
+                </dt>
+                <dd id="solar-flow-battery-power">—</dd>
+              </div>
+              <div class="solar-route-grid">
+                <dt>
+                  <span class="solar-route-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h15m-4-4 4 4-4 4m5 4H5m4-4-4 4 4 4"/></svg></span>
+                  <span>Grid <span id="solar-grid-state" class="solar-route-state"></span></span>
+                </dt>
+                <dd id="solar-flow-grid-power">—</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+        <section class="solar-card solar-battery-card" aria-labelledby="solar-soc-title">
+          <h2 id="solar-soc-title">Battery state of charge</h2>
+          <div class="solar-soc"><strong id="solar-battery-soc">—</strong><span class="solar-caption">SoC</span></div>
+          <div id="solar-soc-gauge" class="solar-soc-gauge" role="meter" aria-labelledby="solar-soc-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true"><span></span></div>
+          <div class="solar-gauge-scale" aria-hidden="true"><span>0%</span><span>100%</span></div>
+          <p class="solar-caption"><strong id="solar-battery-today">—</strong> <span id="solar-battery-energy-label">charged today</span></p>
+          <div class="solar-battery-forecast">
+            <div class="solar-forecast-summary">
+              <div>
+                <strong id="solar-battery-forecast-time" hidden></strong>
+                <p id="solar-battery-forecast-status" class="solar-caption" role="status">Waiting for battery readings.</p>
+              </div>
+              <p id="solar-battery-forecast-rate" class="solar-caption"></p>
+            </div>
+            <svg id="solar-battery-forecast-chart" role="img" aria-label="Linear battery forecast" hidden></svg>
+          </div>
+        </section>
+        <section class="solar-card solar-history" aria-labelledby="solar-history-title">
+          <div class="solar-chart-toolbar">
+            <div><h2 id="solar-history-title">Daily power history</h2><p class="solar-caption">One-minute averages · UTC</p></div>
+            <div class="solar-date-controls">
+              <button type="button" id="solar-previous-day" aria-label="Previous day">‹</button>
+              <input type="text" id="solar-history-date-text" maxlength="10" placeholder="dd-mm-yyyy" autocomplete="off" spellcheck="false"
+                aria-label="Chart date in UTC, day-month-year" aria-describedby="solar-date-error">
+              <span class="solar-date-picker">
+                <button type="button" id="solar-calendar" aria-label="Open chart calendar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 10h16m-11 4h1m4 0h1m-6 3h1"/></svg>
+                </button>
+                <input type="date" id="solar-history-date" min="0001-01-01" tabindex="-1" aria-hidden="true">
+              </span>
+              <button type="button" id="solar-next-day" aria-label="Next day">›</button>
+            </div>
+            <p id="solar-date-error" role="status"></p>
+          </div>
+          <div class="solar-chart-controls" role="group" aria-label="Chart view">
+            <button type="button" id="solar-chart-auto-fit" aria-pressed="true" disabled>Auto fit</button>
+            <button type="button" id="solar-chart-zoom-in" aria-label="Zoom in on the kW scale" disabled>Y zoom +</button>
+            <button type="button" id="solar-chart-zoom-out" aria-label="Zoom out on the kW scale" disabled>Y zoom −</button>
+            <button type="button" id="solar-chart-hand" aria-pressed="false" aria-describedby="solar-chart-hand-note" disabled>Hand tool</button>
+            <span id="solar-chart-hand-note">Use the hand tool to drag the chart.</span>
+            <span class="solar-x-range-label">X axis:</span>
+            <button type="button" class="solar-x-range" data-hours="6" aria-pressed="false" disabled>6 h</button>
+            <button type="button" class="solar-x-range" data-hours="12" aria-pressed="false" disabled>12 h</button>
+            <button type="button" class="solar-x-range" data-hours="24" aria-pressed="false" disabled>24 h</button>
+          </div>
+          <div class="solar-plot"><svg id="solar-power-chart" role="img" aria-label="Daily power in kilowatts and battery state of charge in percent" aria-describedby="solar-chart-signs"></svg><div id="solar-chart-tooltip" class="solar-tooltip" hidden></div><p id="solar-chart-empty">Open a log folder to view the chart.</p></div>
+          <div class="solar-curve-controls">
+            <strong id="solar-curves-title">Show curves</strong>
+            <div id="solar-chart-series" role="group" aria-labelledby="solar-curves-title"></div>
+          </div>
+          <p id="solar-chart-signs" class="solar-chart-note"><strong>Above zero (+)</strong> · Solar, home demand, battery discharge, grid export<br>
+            <strong>Below zero (−)</strong> · Battery charging, grid import</p>
+        </section>
+        <section class="solar-card solar-inverter" aria-labelledby="solar-inverter-title">
+          <div class="solar-section-heading">
+            <div><h2 id="solar-inverter-title">My inverter</h2><p class="solar-caption">Energy totals · kWh</p></div>
+            <span id="solar-inverter-serial" class="solar-caption">—</span>
+          </div>
+          <table aria-describedby="solar-counter-note">
+            <thead><tr><th scope="col">Energy</th><th scope="col">Today</th><th scope="col">Lifetime</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Inverter output</th><td id="solar-inverter-today">—</td><td id="solar-inverter-total">—</td></tr>
+              <tr><th scope="row">Grid import</th><td id="solar-inverter-import-today">—</td><td id="solar-inverter-import-total">—</td></tr>
+              <tr><th scope="row">Grid export</th><td id="solar-inverter-export-today">—</td><td id="solar-inverter-export-total">—</td></tr>
+              <tr><th scope="row">Solar generation</th><td id="solar-pv-today">—</td><td>—</td></tr>
+              <tr><th scope="row">Home consumption</th><td id="solar-home-today">—</td><td>—</td></tr>
+            </tbody>
+          </table>
+          <dl class="solar-inverter-power">
+            <div><dt>Import now</dt><dd id="solar-inverter-import-now">—</dd></div>
+            <div><dt>Export now</dt><dd id="solar-inverter-export-now">—</dd></div>
+          </dl>
+          <p class="solar-chart-note" id="solar-counter-note">Lifetime counters typically start at commissioning. A reset or meter replacement can change the start date.</p>
+        </section>
+      </div>
+      <footer class="solar-cloud-note"><p id="solar-cloud-status" role="status">Checking cloud save status…</p></footer>
+    </div>
+  </section>
+</main>
+<script src="./dashboard-data.js?v=420"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="./cloud.js"></script>
+<script src="./dashboard.js"></script>
+</body>
+</html>
