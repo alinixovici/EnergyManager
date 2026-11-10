@@ -126,11 +126,11 @@
   grid-template-rows: repeat(3, minmax(51px, 1fr)); grid-template-rows: subgrid;
 }
 #solar-dashboard .solar-route-destinations > div {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center;
   gap: 3px 8px; min-height: 45px; margin-block: 2px;
   padding: 4px 8px; border: 1px solid var(--solar-edge); border-radius: 8px; background: var(--solar-surface);
 }
-#solar-dashboard .solar-route-destinations dd { font-size: clamp(13px, 1.7cqw, 17px); font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#solar-dashboard .solar-route-destinations dd { margin: 0; text-align: end; font-size: clamp(13px, 1.7cqw, 17px); font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #solar-dashboard .solar-battery-card { background: #f1ebf5; }
 #solar-dashboard .solar-soc { display: flex; align-items: baseline; gap: 8px; padding: 4px 0 7px; }
 #solar-dashboard .solar-soc strong { color: var(--solar-battery-ink); font-size: 52px; line-height: 1.1; letter-spacing: -.055em; font-weight: 650; }
@@ -215,6 +215,8 @@
   #solar-dashboard .solar-card { padding-inline: 10px; }
   #solar-dashboard .solar-route-source { padding: 8px 6px; }
   #solar-dashboard .solar-route-source dt { flex-wrap: wrap; gap: 4px; }
+  #solar-dashboard .solar-route-destinations > div { column-gap: 4px; padding-inline: 5px; }
+  #solar-dashboard .solar-route-destinations dt { gap: 4px; }
   #solar-dashboard .solar-route-icon { flex-basis: 23px; height: 23px; }
   #solar-dashboard .solar-route-icon svg { width: 15px; height: 15px; }
 }
