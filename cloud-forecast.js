@@ -72,8 +72,10 @@
   const chart = document.getElementById('home-demand-chart');
   const status = document.getElementById('demand-forecast-status');
   let request = 0;
+  let loading = false;
   async function loadDemand() {
-    if (panel.hidden || document.hidden) return;
+    if (panel.hidden || document.hidden || loading) return;
+    loading = true;
     const id = ++request;
     try {
       const rows = await window.energyCloud.readDemandForecast();
@@ -93,12 +95,15 @@
     } catch (error) {
       if (id !== request) return;
       status.textContent = error.message;
-      chart.setAttribute('hidden', '');
+      if (!chart.childElementCount) chart.setAttribute('hidden', '');
+    } finally {
+      loading = false;
     }
     status.hidden = !status.textContent;
   }
   document.querySelector('[aria-controls="solar-forecasts"]').addEventListener('click', loadDemand);
   document.getElementById('forecast-refresh').addEventListener('click', loadDemand);
   window.addEventListener('energy-cloud-connected', loadDemand);
-  setInterval(loadDemand, 60000);
+  document.addEventListener('visibilitychange', loadDemand);
+  setInterval(loadDemand, 5000);
 })();
