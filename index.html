@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=609">
+  <link rel="stylesheet" href="./dashboard.css?v=1015">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -46,6 +46,7 @@
       <nav class="forecast-tabs" aria-label="Dashboard sections">
         <button type="button" aria-controls="solar-overview" aria-pressed="true">Overview</button>
         <button type="button" aria-controls="solar-forecasts" aria-pressed="false">Forecasts</button>
+        <button type="button" aria-controls="solar-control" aria-pressed="false">Control</button>
       </nav>
       <section class="solar-card" id="solar-forecasts" aria-label="Forecasts" hidden>
         <button type="button" id="forecast-refresh">Refresh forecast</button>
@@ -53,6 +54,51 @@
         <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
         <p id="demand-forecast-status" role="status" hidden></p>
         <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
+      </section>
+      <section class="solar-card" id="solar-control" aria-labelledby="solar-command-title" hidden>
+        <div class="solar-section-heading solar-command-heading">
+          <div>
+            <h2 id="solar-command-title">Battery charge plan</h2>
+            <p class="solar-caption" id="solar-command-as-of"></p>
+          </div>
+          <div class="solar-command-actions">
+            <button type="button" id="solar-command-refresh" hidden disabled>Refresh plan</button>
+            <button type="button" id="solar-control-sign-out" hidden>Sign out</button>
+          </div>
+        </div>
+        <form id="solar-control-login" method="post" hidden>
+          <p>Sign in with the Supabase account configured as the forecast uploader.</p>
+          <div class="solar-command-login-fields">
+            <label>Email <input name="email" type="email" autocomplete="username" required></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+            <button type="submit" disabled>Sign in</button>
+          </div>
+        </form>
+        <p id="solar-control-auth-status" role="status"></p>
+        <p id="solar-command-status" role="status" hidden></p>
+        <dl class="solar-command-windows" id="solar-command-windows" hidden></dl>
+        <figure id="solar-command-figure" hidden>
+          <div class="solar-command-scroll" tabindex="0" role="region" aria-label="Scrollable SOC and energy forecast">
+            <svg id="solar-command-chart" role="img" aria-labelledby="solar-command-chart-title solar-command-chart-desc"></svg>
+          </div>
+          <figcaption>
+            <div id="solar-command-legend"></div>
+            <p class="solar-caption">Positive energy shows solar generation and battery charging from the grid. Negative energy shows household demand.</p>
+          </figcaption>
+        </figure>
+        <section class="solar-command-details" id="solar-command-strategy" aria-labelledby="solar-command-strategy-title" hidden>
+          <h3 id="solar-command-strategy-title">Proposed charging strategy</h3>
+          <p id="solar-command-decision"></p>
+          <div class="solar-command-scroll" id="solar-command-schedule" tabindex="0" role="region" aria-label="Proposed grid-charging schedule" hidden></div>
+        </section>
+        <section class="solar-command-details" id="solar-command-defaults" aria-labelledby="solar-command-defaults-title" hidden>
+          <h3 id="solar-command-defaults-title">Defaults used</h3>
+          <div id="solar-command-default-list"></div>
+        </section>
+        <details class="solar-command-details" id="solar-command-sources" hidden>
+          <summary>NAS data and model sources</summary>
+          <ul id="solar-command-source-list"></ul>
+        </details>
       </section>
       <div class="solar-dashboard-grid" id="solar-overview">
         <section class="solar-card solar-routes-card" aria-labelledby="solar-flow-title">
@@ -188,10 +234,12 @@
 </main>
 <script src="./dashboard-data.js?v=608"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=964"></script>
+<script src="./cloud.js?v=1015"></script>
 
 <script src="./forecast-chart.js?v=960"></script>
 <script src="./cloud-forecast.js?v=964"></script>
+<script src="./cloud-control.js?v=1015"></script>
+<script src="./command-chart.js?v=1015"></script>
 <script src="./dashboard.js?v=964"></script>
 </body>
 </html>

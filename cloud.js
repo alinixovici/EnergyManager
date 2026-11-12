@@ -19,6 +19,7 @@
       'FD2324F695 System Data ' + month + '.csv');
   }
   let client;
+  let project;
   const table = () => client.from('energy_readings');
   async function query(request) {
     const { data, error } = await request;
@@ -52,6 +53,7 @@
             if (payload.role !== 'anon') throw new Error();
           }
           client = window.supabase.createClient(endpoint.href, token, { auth: { persistSession: false } });
+          project = { url: endpoint.href, key: token };
           localStorage.setItem(prefix + 'url', endpoint.href);
           localStorage.setItem(prefix + 'key', token);
           form.hidden = true;
@@ -68,6 +70,9 @@
       form.onsubmit = event => { event.preventDefault(); connect(); };
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
+    },
+    controlProject() {
+      return project && { ...project };
     },
     watchForecast(table, refresh) {
       const source = client;
