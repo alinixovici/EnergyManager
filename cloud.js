@@ -56,6 +56,7 @@
           localStorage.setItem(prefix + 'key', token);
           form.hidden = true;
           dashboard.hidden = false;
+          window.dispatchEvent(new Event("energy-cloud-connected"));
           refresh();
         } catch {
           document.getElementById('cloud-error').textContent = 'Enter your HTTPS project URL and publishable or legacy anon key.';
@@ -67,6 +68,12 @@
       form.onsubmit = event => { event.preventDefault(); connect(); };
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
+    },
+    async readForecast() {
+      if (!client) throw new Error('Connect to Supabase first.');
+      return query(client.from('solar_generation_estimate')
+        .select('time,measured_kw,ai_past_estimate_kw,ai_forecast_kw,forecast_download_utc,timezone,model_name')
+        .order('time'));
     },
     async read(selectedDate) {
       if (!client) return;

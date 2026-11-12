@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=608">
+  <link rel="stylesheet" href="./dashboard.css?v=609">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -42,6 +42,15 @@
           <button type="button" id="solar-recycle-month" disabled>Move CSVs to Recycle Bin</button>
         </div>
         <p id="solar-log-message" role="status"></p>
+      </section>
+      <nav class="forecast-tabs" aria-label="Dashboard sections">
+        <button type="button" aria-controls="solar-overview" aria-pressed="true">Overview</button>
+        <button type="button" aria-controls="solar-forecasts" aria-pressed="false">Forecasts</button>
+      </nav>
+      <section class="solar-card" id="solar-forecasts" aria-label="Solar generation forecast" hidden>
+        <button type="button" id="forecast-refresh">Refresh forecast</button>
+        <p id="forecast-status" role="status" hidden></p>
+        <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
       </section>
       <div class="solar-dashboard-grid" id="solar-overview">
         <section class="solar-card solar-routes-card" aria-labelledby="solar-flow-title">
@@ -177,7 +186,9 @@
 </main>
 <script src="./dashboard-data.js?v=608"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=607"></script>
+<script src="./cloud.js?v=609"></script>
 <script src="./dashboard.js?v=607"></script>
+<script src="./forecast-chart.js?v=808"></script>
+<script src="./cloud-forecast.js?v=609"></script>
 </body>
 </html>
