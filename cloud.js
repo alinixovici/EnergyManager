@@ -69,6 +69,13 @@
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
     },
+    watchDemandForecast(refresh) {
+      const source = client;
+      const channel = source.channel('home-demand-forecast')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'home_demand_estimate' }, refresh)
+        .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
+      return () => source.removeChannel(channel);
+    },
     async readDemandForecast() {
       if (!client) throw new Error('Connect to Supabase first.');
       return query(client.from('home_demand_estimate').select('*').order('time'));

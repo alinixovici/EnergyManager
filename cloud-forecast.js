@@ -73,9 +73,12 @@
   const status = document.getElementById('demand-forecast-status');
   let request = 0;
   let loading = false;
-  let cutoffShown = null;
+  let pending = false;
+  let refreshTimer;
+  let unsubscribe;
   async function loadDemand() {
-    if (panel.hidden || document.hidden || loading) return;
+    if (panel.hidden || document.hidden) return;
+    if (loading) { pending = true; return; }
     loading = true;
     const id = ++request;
     try {
@@ -83,7 +86,6 @@
       if (id !== request) return;
       if (!rows.length) throw new Error('No home demand forecast has been published.');
       const cutoff = Date.parse(rows[0].latest_reading) / 1000;
-      cutoffShown = cutoff;
       const series = column => rows.flatMap(row => row[column] == null
         ? [] : [[Date.parse(row.time) / 1000, Number(row[column])]]);
       const result = SolarGeneration.draw(chart, {
@@ -100,13 +102,20 @@
       if (!chart.childElementCount) chart.setAttribute('hidden', '');
     } finally {
       loading = false;
+      if (pending) { pending = false; scheduleDemand(); }
     }
     status.hidden = !status.textContent;
   }
   document.querySelector('[aria-controls="solar-forecasts"]').addEventListener('click', loadDemand);
   document.getElementById('forecast-refresh').addEventListener('click', loadDemand);
-  window.addEventListener('energy-cloud-connected', loadDemand);
-  window.addEventListener('energy-inverter-refresh', ({ detail }) => {
-    if (cutoffShown === null || Date.parse(detail) / 1000 > cutoffShown) loadDemand();
+  function scheduleDemand() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(loadDemand, 250);
+  }
+  window.addEventListener('energy-cloud-connected', () => {
+    unsubscribe?.();
+    unsubscribe = window.energyCloud.watchDemandForecast(scheduleDemand);
+    scheduleDemand();
   });
+  document.addEventListener('visibilitychange', loadDemand);
 })();
