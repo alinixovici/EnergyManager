@@ -21,7 +21,7 @@
       const rows = await window.energyCloud.readForecast();
       if (request !== generation) return;
       if (!rows.length) {
-        chart.hidden = true;
+        chart.setAttribute('hidden', '');
         showStatus('No forecast has been published. Use Read Forecast on the NAS.');
         return;
       }
@@ -35,7 +35,7 @@
         past: series('ai_past_estimate_kw'),
         forecast: series('ai_forecast_kw'),
       });
-      chart.hidden = !result.hasData;
+      chart.toggleAttribute('hidden', !result.hasData);
       showStatus(result.warning);
     } catch (error) {
       if (request === generation) showStatus(error.code === '42501'
@@ -61,7 +61,7 @@
   window.addEventListener('energy-cloud-connected', () => {
     generation++;
     refresh.disabled = false;
-    chart.hidden = true;
+    chart.setAttribute('hidden', '');
     showStatus('');
     if (!panel.hidden) loadForecast();
   });
