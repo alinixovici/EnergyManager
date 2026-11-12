@@ -7,6 +7,8 @@
   const status = document.getElementById('forecast-status');
   const chart = document.getElementById('solar-generation-chart');
   let generation = 0;
+  let solarTimer;
+  let stopSolar;
 
   function showStatus(message) {
     status.textContent = message;
@@ -59,6 +61,11 @@
   refresh.addEventListener('click', loadForecast);
 
   window.addEventListener('energy-cloud-connected', () => {
+    stopSolar?.();
+    stopSolar = window.energyCloud.watchForecast('solar_generation_estimate', () => {
+      clearTimeout(solarTimer);
+      solarTimer = setTimeout(() => { if (!panel.hidden && !document.hidden) loadForecast(); }, 250);
+    });
     generation++;
     refresh.disabled = false;
     chart.setAttribute('hidden', '');
@@ -114,7 +121,7 @@
   }
   window.addEventListener('energy-cloud-connected', () => {
     unsubscribe?.();
-    unsubscribe = window.energyCloud.watchDemandForecast(scheduleDemand);
+    unsubscribe = window.energyCloud.watchForecast('home_demand_estimate', scheduleDemand);
     scheduleDemand();
   });
   document.addEventListener('visibilitychange', loadDemand);

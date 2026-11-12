@@ -69,10 +69,10 @@
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
     },
-    watchDemandForecast(refresh) {
+    watchForecast(table, refresh) {
       const source = client;
-      const channel = source.channel('home-demand-forecast')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'home_demand_estimate' }, refresh)
+      const channel = source.channel('forecast:' + table)
+        .on('postgres_changes', { event: '*', schema: 'public', table }, refresh)
         .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
       return () => source.removeChannel(channel);
     },
