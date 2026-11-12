@@ -66,3 +66,39 @@
     if (!panel.hidden) loadForecast();
   });
 })();
+
+(() => {
+  const panel = document.getElementById('solar-forecasts');
+  const chart = document.getElementById('home-demand-chart');
+  const status = document.getElementById('demand-forecast-status');
+  let request = 0;
+  async function loadDemand() {
+    if (panel.hidden || document.hidden) return;
+    const id = ++request;
+    try {
+      const rows = await window.energyCloud.readDemandForecast();
+      if (id !== request) return;
+      if (!rows.length) throw new Error('No home demand forecast has been published.');
+      const cutoff = Date.parse(rows[0].latest_reading) / 1000;
+      const series = column => rows.flatMap(row => row[column] == null
+        ? [] : [[Date.parse(row.time) / 1000, Number(row[column])]]);
+      const result = SolarGeneration.draw(chart, {
+        kind: 'demand', timezone: rows[0].timezone, latest_reading: cutoff,
+        start: cutoff - 48 * 3600, end: cutoff + 48 * 3600,
+        measured: series('measured_kwh'), past: series('ai_past_estimate_kwh'),
+        forecast: series('ai_forecast_kwh'),
+      });
+      chart.toggleAttribute('hidden', !result.hasData);
+      status.textContent = result.warning;
+    } catch (error) {
+      if (id !== request) return;
+      status.textContent = error.message;
+      chart.setAttribute('hidden', '');
+    }
+    status.hidden = !status.textContent;
+  }
+  document.querySelector('[aria-controls="solar-forecasts"]').addEventListener('click', loadDemand);
+  document.getElementById('forecast-refresh').addEventListener('click', loadDemand);
+  window.addEventListener('energy-cloud-connected', loadDemand);
+  setInterval(loadDemand, 60000);
+})();

@@ -47,10 +47,12 @@
         <button type="button" aria-controls="solar-overview" aria-pressed="true">Overview</button>
         <button type="button" aria-controls="solar-forecasts" aria-pressed="false">Forecasts</button>
       </nav>
-      <section class="solar-card" id="solar-forecasts" aria-label="Solar generation forecast" hidden>
+      <section class="solar-card" id="solar-forecasts" aria-label="Forecasts" hidden>
         <button type="button" id="forecast-refresh">Refresh forecast</button>
         <p id="forecast-status" role="status" hidden></p>
         <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
+        <p id="demand-forecast-status" role="status" hidden></p>
+        <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
       </section>
       <div class="solar-dashboard-grid" id="solar-overview">
         <section class="solar-card solar-routes-card" aria-labelledby="solar-flow-title">
@@ -186,9 +188,9 @@
 </main>
 <script src="./dashboard-data.js?v=608"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=609"></script>
+<script src="./cloud.js?v=960"></script>
 <script src="./dashboard.js?v=607"></script>
-<script src="./forecast-chart.js?v=809"></script>
-<script src="./cloud-forecast.js?v=610"></script>
+<script src="./forecast-chart.js?v=960"></script>
+<script src="./cloud-forecast.js?v=960"></script>
 </body>
 </html>

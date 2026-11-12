@@ -69,6 +69,10 @@
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
     },
+    async readDemandForecast() {
+      if (!client) throw new Error('Connect to Supabase first.');
+      return query(client.from('home_demand_estimate').select('*').order('time'));
+    },
     async readForecast() {
       if (!client) throw new Error('Connect to Supabase first.');
       return query(client.from('solar_generation_estimate')

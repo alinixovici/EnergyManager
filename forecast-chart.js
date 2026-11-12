@@ -4,13 +4,14 @@ const SolarGeneration = (() => {
   const daySeconds = 86400;
 
   function draw(svg, data) {
+    const demand = data.kind === 'demand';
     let warning = data.model_warning || '';
     const measured = data.measured.filter(point => Array.isArray(point)
       && Number.isFinite(point[0]) && Number.isFinite(point[1]));
     const series = [
-      { values: measured, color: '#238783', label: 'Measured inverter', fill: true },
-      { values: data.past, color: '#BA4A18', label: 'AI past estimate' },
-      { values: data.forecast, color: '#000000', label: 'AI forecast (ensemble median)' },
+      { values: measured, color: '#238783', label: demand ? 'Measured' : 'Measured inverter', fill: true },
+      { values: data.past, color: '#BA4A18', label: demand ? 'Estimated' : 'AI past estimate' },
+      { values: data.forecast, color: '#000000', label: demand ? 'Forecast' : 'AI forecast (ensemble median)' },
     ].filter(line => line.values.length);
 
     svg.replaceChildren();
@@ -18,7 +19,8 @@ const SolarGeneration = (() => {
       warning = [warning, 'No measured inverter data is available.'].filter(Boolean).join(' ');
       return { hasData: false, warning };
     }
-    const download = Number.isFinite(data.download) ? data.download : null;
+    const cutoff = demand && Number.isFinite(data.latest_reading) ? data.latest_reading : data.download;
+    const download = Number.isFinite(cutoff) ? cutoff : null;
     const width = 1200, height = 500;
     const left = 108, right = 1176, top = 60, bottom = 365;
     const timezone = { timeZone: data.timezone };
@@ -35,8 +37,8 @@ const SolarGeneration = (() => {
       if (label === '00:00') midnights.push(time);
       if (['00:00', '06:00', '12:00', '18:00'].includes(label)) ticks.push([time, label]);
     }
-    const start = midnights.filter(time => time <= min).pop() ?? min;
-    const end = midnights.find(time => time >= max && time > start && time > download) ?? Math.max(max, start + 900);
+    const start = demand ? data.start : midnights.filter(time => time <= min).pop() ?? min;
+    const end = demand ? data.end : midnights.find(time => time >= max && time > start && time > download) ?? Math.max(max, start + 900);
     const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.29;
     const spacing = ceiling / 9;
     const magnitude = 10 ** Math.floor(Math.log10(spacing));
@@ -60,20 +62,20 @@ const SolarGeneration = (() => {
       element('text', { x, y, 'text-anchor': anchor, 'font-size': size, 'font-weight': weight, fill: '#000', ...extra }, text);
     }
     element('rect', { width, height, fill: '#fff' });
-    label(left, 42, 'Solar generation forecast', 'start', 24, 700);
+    label(left, 42, demand ? 'Home demand forecast' : 'Solar generation forecast', 'start', 24, 700);
     const axisMiddle = (top + bottom) / 2;
-    label(61, axisMiddle, 'Hourly mean DC power (kW)', 'middle', 14, 400, {
+    label(61, axisMiddle, demand ? 'Hourly home demand (kWh)' : 'Hourly mean DC power (kW)', 'middle', 14, 400, {
       transform: 'rotate(-90 61 ' + axisMiddle + ')',
     });
     const dayKey = new Intl.DateTimeFormat('en-CA', { ...timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
-    const today = dayKey.format(new Date());
+    const today = dayKey.format(demand ? download * 1000 : new Date());
     const days = midnights.slice(0, -1).flatMap((time, i) => {
       const until = midnights[i + 1];
-      return time >= start && time < end ? [{ time, until, key: dayKey.format(time * 1000) }] : [];
+      return until > start && time < end ? [{ time, until, key: dayKey.format(time * 1000) }] : [];
     });
     for (const { time, until, key } of days) {
       if (key !== today) element('rect', {
-        x: x(time), y: top, width: x(until) - x(time), height: bottom - top, fill: '#EEF2F5',
+        x: x(Math.max(time, start)), y: top, width: x(Math.min(until, end)) - x(Math.max(time, start)), height: bottom - top, fill: '#EEF2F5',
       });
     }
     for (let power = 0; power <= ceiling + 1e-9; power += step) {
@@ -85,19 +87,20 @@ const SolarGeneration = (() => {
     }
     for (let i = 0; i < midnights.length - 1; i++) {
       const time = midnights[i];
-      if (time < start || time >= end) continue;
+      if (midnights[i + 1] <= start || time >= end) continue;
       if (time > start) line(x(time), top, x(time), bottom, '#BCC7CE');
       const [day, month] = calendar.format(time * 1000).split(' ');
       const number = Number(day);
       const suffix = number % 100 >= 11 && number % 100 <= 13
         ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[number % 10] || 'th');
-      label(x((time + midnights[i + 1]) / 2), bottom + 52, day + suffix + ' ' + month, 'middle', 14, 700);
+      label(x((Math.max(time, start) + Math.min(midnights[i + 1], end)) / 2), bottom + 52, day + suffix + ' ' + month, 'middle', 14, 700);
     }
     line(left, top, left, bottom, '#BBC4CB');
     line(left, bottom, right, bottom, '#BBC4CB');
     for (const { values, color, fill } of series) {
       let segment = [];
-      for (const point of values) {
+      for (const [time, power] of values) {
+        const point = [demand && color === '#000000' ? Math.max(time, download) : time, power];
         if (segment.length && point[0] - segment[segment.length - 1][0] > 3600) {
           drawSegment(segment, color, fill);
           segment = [];
@@ -108,6 +111,14 @@ const SolarGeneration = (() => {
     }
     function drawSegment(points, color, fill) {
       const xy = points.map(([time, power]) => [x(time), y(power)]);
+      if (demand) {
+        let path = 'M' + xy[0].join(',');
+        for (let i = 1; i < xy.length; i++) path += ' H' + xy[i][0] + ' V' + xy[i][1];
+        path += ' H' + x(Math.min(end, points[points.length - 1][0] + 3600));
+        if (fill) element('path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
+        element('path', { d: path, fill: 'none', stroke: color, 'stroke-width': 2.4 });
+        return;
+      }
       if (xy.length === 1) {
         element('circle', { cx: xy[0][0], cy: xy[0][1], r: 2.5, fill: color });
         return;
@@ -154,7 +165,7 @@ const SolarGeneration = (() => {
     const actualHours = new Map(measured);
     const estimateHours = new Map(data.past);
     const sum = (points, time, until, match) => {
-      const values = points.filter(([hour]) => hour > time && hour <= until && (!match || match.has(hour)));
+      const values = points.filter(([hour]) => (demand ? hour >= time && hour < until : hour > time && hour <= until) && (!match || match.has(hour)));
       return values.length ? values.reduce((total, [, power]) => total + power, 0) : null;
     };
     for (const { time, until, key } of days) {
@@ -166,9 +177,9 @@ const SolarGeneration = (() => {
           [key === today ? 'Measured so far' : 'Measured',
             sum(measured, time, until, key === today ? null : estimateHours), '#16736E'],
         ];
-      const center = x((time + until) / 2);
-      const cardWidth = Math.min(202, x(until) - x(time) - 10);
-      if (cardWidth <= 0) continue;
+      const center = x((Math.max(time, start) + Math.min(until, end)) / 2);
+      const cardWidth = Math.min(202, x(Math.min(until, end)) - x(Math.max(time, start)) - 10);
+      if (cardWidth <= 0 || (demand && key !== today && (time < start || until > end))) continue;
       const scale = Math.min(1, cardWidth / 202);
       const cardX = center - cardWidth / 2;
       element('rect', { x: cardX, y: top + 5, width: cardWidth,
@@ -183,7 +194,7 @@ const SolarGeneration = (() => {
     }
     label((left + right) / 2, bottom + 72, data.timezone === 'Europe/London'
       ? 'UK local time' : data.timezone + ' local time', 'middle', 14);
-    const widths = { 'Measured inverter': 178, 'AI past estimate': 167, 'AI forecast (ensemble median)': 238 };
+    const widths = { 'Measured inverter': 178, 'AI past estimate': 167, 'AI forecast (ensemble median)': 238, Measured: 132, Estimated: 135, Forecast: 120 };
     const total = series.reduce((sum, item) => sum + widths[item.label], 0) - 20;
     let position = (width - total) / 2;
     for (const { color, label: title } of series) {
