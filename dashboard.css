@@ -265,14 +265,3 @@
 #solar-dashboard .solar-command-table { min-width: 490px; width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 #solar-dashboard .solar-command-table :is(th, td) { padding: 5px 8px; border-bottom: 1px solid var(--solar-edge); text-align: left; white-space: nowrap; }
 #solar-dashboard .solar-command-table th { color: var(--solar-muted); }
-#solar-dashboard .solar-command-actions, #solar-dashboard .solar-command-login-fields {
-  display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px;
-}
-#solar-dashboard #solar-control-login { margin-top: 12px; }
-#solar-dashboard .solar-command-login-fields { margin-top: 8px; }
-#solar-dashboard .solar-command-login-fields label { display: grid; gap: 4px; min-width: 0; }
-#solar-dashboard .solar-command-login-fields input {
-  min-height: 32px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--solar-edge);
-  border-radius: 6px; background: var(--solar-surface); color: inherit; font: inherit;
-}
-#solar-dashboard #solar-control-auth-status:not(:empty) { margin-top: 8px; }

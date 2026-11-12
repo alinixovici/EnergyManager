@@ -19,7 +19,6 @@
       'FD2324F695 System Data ' + month + '.csv');
   }
   let client;
-  let project;
   const table = () => client.from('energy_readings');
   async function query(request) {
     const { data, error } = await request;
@@ -39,6 +38,23 @@
       inclusive = false;
     }
   }
+  const controlColumns = 'time,end_time,soc,estimated_soc,no_charge_soc,end_soc,end_no_charge_soc,'
+    + 'demand_kwh,estimated_demand_kwh,solar_kwh,estimated_solar_kwh,grid_kwh';
+  const controlPlan = source => query(source.from('control_graph').select('time,metadata').eq('series', 'plan').maybeSingle());
+  async function controlPoints(source, series, start, end) {
+    const rows = [];
+    let cursor;
+    for (;;) {
+      const request = source.from('control_graph').select(controlColumns).eq('series', series)
+        .lt('time', end).order('time').limit(1000);
+      const page = await query(cursor ? request.gt('time', cursor) : request.gte('time', start));
+      if (!page.length) return rows;
+      for (const { time, end_time, ...values } of page) {
+        rows.push({ ...values, time: Date.parse(time) / 1000, end: end_time ? Date.parse(end_time) / 1000 : null });
+      }
+      cursor = page.at(-1).time;
+    }
+  }
   window.energyCloud = {
     start(refresh) {
       function connect() {
@@ -53,7 +69,6 @@
             if (payload.role !== 'anon') throw new Error();
           }
           client = window.supabase.createClient(endpoint.href, token, { auth: { persistSession: false } });
-          project = { url: endpoint.href, key: token };
           localStorage.setItem(prefix + 'url', endpoint.href);
           localStorage.setItem(prefix + 'key', token);
           form.hidden = true;
@@ -71,8 +86,38 @@
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
     },
-    controlProject() {
-      return project && { ...project };
+    watchControl(refresh) {
+      const source = client;
+      const changes = { schema: 'public', table: 'control_graph', filter: 'series=eq.plan' };
+      const channel = source.channel('control-graph-plan')
+        .on('postgres_changes', { ...changes, event: 'INSERT' }, refresh)
+        .on('postgres_changes', { ...changes, event: 'UPDATE' }, refresh)
+        .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
+      return () => source.removeChannel(channel);
+    },
+    async readControl() {
+      if (!client) throw new Error('Connect to Supabase first.');
+      const source = client;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const plan = await controlPlan(source);
+        if (client !== source) throw new Error('The Supabase connection changed.');
+        if (!plan) return null;
+        const metadata = plan.metadata;
+        if (!Number.isFinite(metadata?.as_of) || !Number.isFinite(metadata.start)
+          || !Number.isFinite(metadata.end) || metadata.end <= metadata.start) {
+          throw new Error('The published Control plan has no valid time window.');
+        }
+        const start = new Date(metadata.start * 1000).toISOString();
+        const end = new Date(metadata.end * 1000).toISOString();
+        const [history_soc, history, forecast] = await Promise.all(['history_soc', 'history', 'forecast']
+          .map(series => controlPoints(source, series, start, end)));
+        const latest = await controlPlan(source);
+        if (client !== source) throw new Error('The Supabase connection changed.');
+        if (latest?.time === plan.time && latest.metadata?.as_of === metadata.as_of) {
+          return { ...metadata, history_soc, history, forecast };
+        }
+      }
+      throw new Error('The NAS is updating the Control plan. Try refreshing again.');
     },
     watchForecast(table, refresh) {
       const source = client;

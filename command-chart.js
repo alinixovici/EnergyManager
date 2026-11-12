@@ -2,7 +2,7 @@
 
 (() => {
   const panel = document.getElementById('solar-control');
-  const cloud = window.energyControl;
+  const cloud = window.energyCloud;
   if (!panel || !cloud) return;
 
   const get = name => document.getElementById('solar-command-' + name);
@@ -20,6 +20,9 @@
   const namespace = 'http://www.w3.org/2000/svg';
   let loading = false;
   let pending = false;
+  let generation = 0;
+  let updateTimer;
+  let stopWatching;
 
   const lines = {
     measuredSoc: { label: 'Realised SOC', color: '#0072b2' },
@@ -420,36 +423,31 @@
   }
 
   async function refresh() {
-    const signedIn = cloud.signedIn();
-    button.hidden = !signedIn;
-    if (!signedIn) {
-      pending = false;
-      button.disabled = true;
-      render({});
-      status.hidden = true;
-      return;
-    }
     if (panel.hidden || document.hidden) return;
     if (loading) { pending = true; return; }
+    const connection = generation;
     loading = true;
     button.disabled = true;
     panel.setAttribute('aria-busy', 'true');
     try {
-      const data = await cloud.read();
-      if (!cloud.signedIn()) return;
+      const data = await cloud.readControl();
+      if (connection !== generation) return;
       render(data ? {
         strategy: 'Plan backwards to protect the battery reserve. Schedule only the grid energy needed during the allowed hours, up to the grid charge target cap. Solar charges the battery first and can raise SOC above the grid charge cap up to the operating maximum.',
         ...data,
       } : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
       status.hidden = false;
     } catch (error) {
-      if (cloud.signedIn()) {
-        render({ status: 'unavailable', message: error.message || 'Could not read the Control plan from Supabase.' });
+      if (connection === generation) {
+        const message = error.code === '42501'
+          ? 'Run control-read.sql in Supabase to enable Control reads.'
+          : error.message || 'Could not read the Control plan from Supabase.';
+        render({ status: 'unavailable', message });
         status.hidden = false;
       }
     } finally {
       loading = false;
-      button.disabled = !cloud.signedIn();
+      button.disabled = false;
       panel.removeAttribute('aria-busy');
       if (pending) { pending = false; refresh(); }
     }
@@ -457,7 +455,18 @@
 
   button.addEventListener('click', refresh);
   document.querySelector('[aria-controls="solar-control"]').addEventListener('click', refresh);
-  window.addEventListener('energy-control-changed', refresh);
+  window.addEventListener('energy-cloud-connected', () => {
+    generation++;
+    clearTimeout(updateTimer);
+    stopWatching?.();
+    render({});
+    status.hidden = true;
+    stopWatching = cloud.watchControl(() => {
+      clearTimeout(updateTimer);
+      updateTimer = setTimeout(refresh, 250);
+    });
+    refresh();
+  });
   document.addEventListener('visibilitychange', refresh);
   const timer = setInterval(() => {
     if (panel.isConnected) refresh();

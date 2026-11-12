@@ -8,4 +8,4 @@ Run [forecast-read.sql](forecast-read.sql) once in the Supabase SQL Editor after
 
 ## Control
 
-With the NAS publishing `control_graph`, open **Control** and sign in with the existing Supabase forecast uploader account. The dashboard displays the latest NAS charge plan and refreshes when Supabase publishes a new one. The sign-in lasts until you sign out or reload the page.
+Once the NAS is publishing `control_graph`, run [control-read.sql](control-read.sql) in the same Supabase project. **Control** uses the dashboard's existing publishable-key connection and refreshes when the NAS publishes a new plan. Anyone with the project URL and publishable key can read the Control snapshot. Uploads still require the configured NAS uploader.
