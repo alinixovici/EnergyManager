@@ -37,7 +37,7 @@ const SolarGeneration = (() => {
     }
     const start = midnights.filter(time => time <= min).pop() ?? min;
     const end = midnights.find(time => time >= max && time > start && time > download) ?? Math.max(max, start + 900);
-    const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.05;
+    const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.29;
     const spacing = ceiling / 9;
     const magnitude = 10 ** Math.floor(Math.log10(spacing));
     const step = [1, 2, 2.5, 5, 10].find(value => value * magnitude >= spacing) * magnitude;
@@ -65,6 +65,17 @@ const SolarGeneration = (() => {
     label(61, axisMiddle, 'Hourly mean DC power (kW)', 'middle', 14, 400, {
       transform: 'rotate(-90 61 ' + axisMiddle + ')',
     });
+    const dayKey = new Intl.DateTimeFormat('en-CA', { ...timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const today = dayKey.format(new Date());
+    const days = midnights.slice(0, -1).flatMap((time, i) => {
+      const until = midnights[i + 1];
+      return time >= start && time < end ? [{ time, until, key: dayKey.format(time * 1000) }] : [];
+    });
+    for (const { time, until, key } of days) {
+      if (key !== today) element('rect', {
+        x: x(time), y: top, width: x(until) - x(time), height: bottom - top, fill: '#EEF2F5',
+      });
+    }
     for (let power = 0; power <= ceiling + 1e-9; power += step) {
       line(left, y(power), right, y(power), '#DDE3E7', 0.8);
       label(left - 10, y(power) + 4, power.toFixed(decimals), 'end');
@@ -136,9 +147,39 @@ const SolarGeneration = (() => {
       const [day, month] = calendar.format(download * 1000).split(' ');
       const color = { fill: '#34465A' };
       const labelX = divider - 11;
-      element('rect', { x: labelX - 48, y: top + 6, width: 53, height: 34, fill: '#fff', opacity: 0.95 });
-      label(labelX, top + 21, day.padStart(2, '0') + month.toLowerCase(), 'end', 13, 700, color);
-      label(labelX, top + 36, clock.format(download * 1000), 'end', 13, 700, color);
+      element('rect', { x: labelX - 48, y: top + 63, width: 53, height: 34, fill: '#fff', opacity: 0.95 });
+      label(labelX, top + 78, day.padStart(2, '0') + month.toLowerCase(), 'end', 13, 700, color);
+      label(labelX, top + 93, clock.format(download * 1000), 'end', 13, 700, color);
+    }
+    const actualHours = new Map(measured);
+    const estimateHours = new Map(data.past);
+    const sum = (points, time, until, match) => {
+      const values = points.filter(([hour]) => hour > time && hour <= until && (!match || match.has(hour)));
+      return values.length ? values.reduce((total, [, power]) => total + power, 0) : null;
+    };
+    for (const { time, until, key } of days) {
+      const estimated = (key === today ? [...data.past, ...data.forecast] : data.past);
+      const metrics = key > today
+        ? [['Forecast', sum(data.forecast, time, until), '#26384D']]
+        : [
+          ['Estimated', sum(estimated, time, until, key === today ? null : actualHours), '#A3431B'],
+          [key === today ? 'Measured so far' : 'Measured',
+            sum(measured, time, until, key === today ? null : estimateHours), '#16736E'],
+        ];
+      const center = x((time + until) / 2);
+      const cardWidth = Math.min(202, x(until) - x(time) - 10);
+      if (cardWidth <= 0) continue;
+      const scale = Math.min(1, cardWidth / 202);
+      const cardX = center - cardWidth / 2;
+      element('rect', { x: cardX, y: top + 5, width: cardWidth,
+        height: (12 + metrics.length * 20) * scale, rx: 7 * scale,
+        fill: '#fff', stroke: '#CBD8E2', 'stroke-width': 1 });
+      metrics.forEach(([name, amount, color], i) => {
+        const rowY = top + 5 + (20 + i * 20) * scale;
+        label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, { fill: color });
+        label(cardX + cardWidth - 10 * scale, rowY,
+          amount === null ? '—' : amount.toFixed(2) + ' kWh', 'end', 15 * scale, 700, { fill: color });
+      });
     }
     label((left + right) / 2, bottom + 72, data.timezone === 'Europe/London'
       ? 'UK local time' : data.timezone + ' local time', 'middle', 14);
