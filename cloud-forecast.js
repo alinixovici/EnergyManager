@@ -73,6 +73,7 @@
   const status = document.getElementById('demand-forecast-status');
   let request = 0;
   let loading = false;
+  let cutoffShown = null;
   async function loadDemand() {
     if (panel.hidden || document.hidden || loading) return;
     loading = true;
@@ -82,6 +83,7 @@
       if (id !== request) return;
       if (!rows.length) throw new Error('No home demand forecast has been published.');
       const cutoff = Date.parse(rows[0].latest_reading) / 1000;
+      cutoffShown = cutoff;
       const series = column => rows.flatMap(row => row[column] == null
         ? [] : [[Date.parse(row.time) / 1000, Number(row[column])]]);
       const result = SolarGeneration.draw(chart, {
@@ -104,6 +106,7 @@
   document.querySelector('[aria-controls="solar-forecasts"]').addEventListener('click', loadDemand);
   document.getElementById('forecast-refresh').addEventListener('click', loadDemand);
   window.addEventListener('energy-cloud-connected', loadDemand);
-  document.addEventListener('visibilitychange', loadDemand);
-  setInterval(loadDemand, 5000);
+  window.addEventListener('energy-inverter-refresh', ({ detail }) => {
+    if (cutoffShown === null || Date.parse(detail) / 1000 > cutoffShown) loadDemand();
+  });
 })();

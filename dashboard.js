@@ -509,6 +509,7 @@
       const result = await window.energyCloud.read(dateInput.value);
       if (!result) return;
       const { system, meter, latestFile, previousFile, selectedFile, date } = result;
+      window.dispatchEvent(new CustomEvent('energy-inverter-refresh', { detail: system?.stamp }));
       showCurrent('FD2324F695', system, meter);
       inverterSettings = { reserve: result.reserve };
       const previous = previousFile ? [{ serial: 'FD2324F695', month: previousFile.name.slice(-11, -4), system: previousFile }] : [];
