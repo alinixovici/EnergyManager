@@ -1,44 +1,45 @@
 'use strict';
 
 const SolarGeneration = (() => {
-  const daySeconds = 86400;
-
   function draw(svg, data) {
     const demand = data.kind === 'demand';
     let warning = data.model_warning || '';
-    const measured = data.measured.filter(point => Array.isArray(point)
-      && Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const { start, end } = data;
+    svg.replaceChildren();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return { hasData: false, warning: 'The NAS did not provide a valid forecast chart window.' };
+    }
+    const withinWindow = points => points.filter(point => Array.isArray(point)
+      && Number.isFinite(point[0]) && Number.isFinite(point[1])
+      && (demand ? point[0] >= start && point[0] < end : point[0] > start && point[0] <= end));
+    const measured = withinWindow(data.measured);
+    const past = withinWindow(data.past);
+    const forecast = withinWindow(data.forecast);
     const series = [
       { values: measured, color: '#238783', label: demand ? 'Measured' : 'Measured inverter', fill: true },
-      { values: data.past, color: '#BA4A18', label: demand ? 'Estimated' : 'AI past estimate' },
-      { values: data.forecast, color: '#000000', label: demand ? 'Forecast' : 'AI forecast (ensemble median)' },
+      { values: past, color: '#BA4A18', label: demand ? 'Estimated' : 'AI past estimate' },
+      { values: forecast, color: '#000000', label: demand ? 'Forecast' : 'AI forecast (ensemble median)' },
     ].filter(line => line.values.length);
 
-    svg.replaceChildren();
     if (!series.length) {
       warning = [warning, 'No measured inverter data is available.'].filter(Boolean).join(' ');
       return { hasData: false, warning };
     }
     const cutoff = demand && Number.isFinite(data.latest_reading) ? data.latest_reading : data.download;
-    const download = Number.isFinite(cutoff) ? cutoff : null;
+    const download = Number.isFinite(cutoff) && cutoff >= start && cutoff < end ? cutoff : null;
     const width = 1200, height = 500;
     const left = 108, right = 1176, top = 60, bottom = 365;
     const timezone = { timeZone: data.timezone };
     const calendar = new Intl.DateTimeFormat('en-GB', { ...timezone, day: 'numeric', month: 'short' });
     const clock = new Intl.DateTimeFormat('en-GB', { ...timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     const all = series.flatMap(line => line.values);
-    const times = all.map(point => point[0]);
-    if (download !== null) times.push(download);
-    const min = Math.min(...times);
-    const max = Math.max(...times);
-    const midnights = [], ticks = [];
-    for (let time = Math.floor((min - daySeconds) / 900) * 900; time <= max + daySeconds; time += 900) {
+    const midnights = [start], ticks = [];
+    for (let time = start; time < end; time += 900) {
       const label = clock.format(time * 1000);
-      if (label === '00:00') midnights.push(time);
+      if (label === '00:00' && time > start) midnights.push(time);
       if (['00:00', '06:00', '12:00', '18:00'].includes(label)) ticks.push([time, label]);
     }
-    const start = demand ? data.start : midnights.filter(time => time <= min).pop() ?? min;
-    const end = demand ? data.end : midnights.find(time => time >= max && time > start && time > download) ?? Math.max(max, start + 900);
+    midnights.push(end);
     const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.29;
     const spacing = ceiling / 9;
     const magnitude = 10 ** Math.floor(Math.log10(spacing));
@@ -63,58 +64,54 @@ const SolarGeneration = (() => {
     }
     element('rect', { width, height, fill: '#fff' });
     label(left, 42, demand ? 'Home demand forecast' : 'Solar generation forecast', 'start', 24, 700);
+    const intervalSeconds = demand ? (data.interval_minutes || 60) * 60 : 3600;
     const axisMiddle = (top + bottom) / 2;
-    label(61, axisMiddle, demand ? 'Hourly home demand (kWh)' : 'Hourly mean DC power (kW)', 'middle', 14, 400, {
+    label(61, axisMiddle, demand ? ((data.interval_minutes || 60) === 60 ? 'Hourly home demand (kWh)' : 'Home demand per ' + (data.interval_minutes || 60) + ' min (kWh)') : 'Hourly mean DC power (kW)', 'middle', 14, 400, {
       transform: 'rotate(-90 61 ' + axisMiddle + ')',
     });
     const dayKey = new Intl.DateTimeFormat('en-CA', { ...timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
-    const today = dayKey.format(demand ? download * 1000 : new Date());
-    const days = midnights.slice(0, -1).flatMap((time, i) => {
-      const until = midnights[i + 1];
-      return until > start && time < end ? [{ time, until, key: dayKey.format(time * 1000) }] : [];
-    });
+    const today = dayKey.format(Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now());
+    const days = midnights.slice(0, -1).map((time, i) => ({
+      time, until: midnights[i + 1], key: dayKey.format(time * 1000),
+    }));
     for (const { time, until, key } of days) {
       if (key !== today) element('rect', {
-        x: x(Math.max(time, start)), y: top, width: x(Math.min(until, end)) - x(Math.max(time, start)), height: bottom - top, fill: '#EEF2F5',
+        x: x(time), y: top, width: x(until) - x(time), height: bottom - top, fill: '#EEF2F5',
       });
     }
     for (let power = 0; power <= ceiling + 1e-9; power += step) {
       line(left, y(power), right, y(power), '#DDE3E7', 0.8);
       label(left - 10, y(power) + 4, power.toFixed(decimals), 'end');
     }
-    for (const [time, tick] of ticks) {
-      if (time >= start && time < end) label(x(time), bottom + 19, tick, 'middle', 13);
-    }
-    for (let i = 0; i < midnights.length - 1; i++) {
-      const time = midnights[i];
-      if (midnights[i + 1] <= start || time >= end) continue;
+    for (const [time, tick] of ticks) label(x(time), bottom + 19, tick, 'middle', 13);
+    for (const { time, until } of days) {
       if (time > start) line(x(time), top, x(time), bottom, '#BCC7CE');
       const [day, month] = calendar.format(time * 1000).split(' ');
       const number = Number(day);
       const suffix = number % 100 >= 11 && number % 100 <= 13
         ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[number % 10] || 'th');
-      label(x((Math.max(time, start) + Math.min(midnights[i + 1], end)) / 2), bottom + 52, day + suffix + ' ' + month, 'middle', 14, 700);
+      label(x((time + until) / 2), bottom + 52, day + suffix + ' ' + month, 'middle', 14, 700);
     }
     line(left, top, left, bottom, '#BBC4CB');
     line(left, bottom, right, bottom, '#BBC4CB');
     for (const { values, color, fill } of series) {
+      const firstTime = demand && color === '#000000' ? download ?? start : start;
       let segment = [];
-      for (const [time, power] of values) {
-        const point = [demand && color === '#000000' ? Math.max(time, download) : time, power];
-        if (segment.length && point[0] - segment[segment.length - 1][0] > 3600) {
-          drawSegment(segment, color, fill);
+      for (const point of values) {
+        if (segment.length && point[0] - segment[segment.length - 1][0] > intervalSeconds) {
+          drawSegment(segment, color, fill, firstTime);
           segment = [];
         }
         segment.push(point);
       }
-      drawSegment(segment, color, fill);
+      drawSegment(segment, color, fill, firstTime);
     }
-    function drawSegment(points, color, fill) {
-      const xy = points.map(([time, power]) => [x(time), y(power)]);
+    function drawSegment(points, color, fill, firstTime) {
+      const xy = points.map(([time, power]) => [x(Math.max(time, firstTime)), y(power)]);
       if (demand) {
         let path = 'M' + xy[0].join(',');
         for (let i = 1; i < xy.length; i++) path += ' H' + xy[i][0] + ' V' + xy[i][1];
-        path += ' H' + x(Math.min(end, points[points.length - 1][0] + 3600));
+        path += ' H' + x(Math.min(end, points[points.length - 1][0] + intervalSeconds));
         if (fill) element('path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
         element('path', { d: path, fill: 'none', stroke: color, 'stroke-width': 2.4 });
         return;
@@ -163,23 +160,22 @@ const SolarGeneration = (() => {
       label(labelX, top + 93, clock.format(download * 1000), 'end', 13, 700, color);
     }
     const actualHours = new Map(measured);
-    const estimateHours = new Map(data.past);
+    const estimateHours = new Map(past);
     const sum = (points, time, until, match) => {
       const values = points.filter(([hour]) => (demand ? hour >= time && hour < until : hour > time && hour <= until) && (!match || match.has(hour)));
       return values.length ? values.reduce((total, [, power]) => total + power, 0) : null;
     };
     for (const { time, until, key } of days) {
-      const estimated = (key === today ? [...data.past, ...data.forecast] : data.past);
+      const estimated = key === today ? [...past, ...forecast] : past;
       const metrics = key > today
-        ? [['Forecast', sum(data.forecast, time, until), '#26384D']]
+        ? [['Forecast', sum(forecast, time, until), '#26384D']]
         : [
           ['Estimated', sum(estimated, time, until, key === today ? null : actualHours), '#A3431B'],
           [key === today ? 'Measured so far' : 'Measured',
             sum(measured, time, until, key === today ? null : estimateHours), '#16736E'],
         ];
-      const center = x((Math.max(time, start) + Math.min(until, end)) / 2);
-      const cardWidth = Math.min(202, x(Math.min(until, end)) - x(Math.max(time, start)) - 10);
-      if (cardWidth <= 0 || (demand && key !== today && (time < start || until > end))) continue;
+      const center = x((time + until) / 2);
+      const cardWidth = Math.min(202, x(until) - x(time) - 10);
       const scale = Math.min(1, cardWidth / 202);
       const cardX = center - cardWidth / 2;
       element('rect', { x: cardX, y: top + 5, width: cardWidth,

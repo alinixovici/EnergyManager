@@ -96,7 +96,7 @@
       const series = column => rows.flatMap(row => row[column] == null
         ? [] : [[Date.parse(row.time) / 1000, Number(row[column])]]);
       const result = SolarGeneration.draw(chart, {
-        kind: 'demand', timezone: rows[0].timezone, latest_reading: cutoff,
+        kind: 'demand', timezone: rows[0].timezone, latest_reading: cutoff, interval_minutes: rows[0].interval_minutes ?? 60,
         start: cutoff - 48 * 3600, end: cutoff + 48 * 3600,
         measured: series('measured_kwh'), past: series('ai_past_estimate_kwh'),
         forecast: series('ai_forecast_kwh'),

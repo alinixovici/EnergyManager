@@ -128,7 +128,15 @@
     },
     async readDemandForecast() {
       if (!client) throw new Error('Connect to Supabase first.');
-      return query(client.from('home_demand_estimate').select('*').order('time'));
+      const rows = [];
+      for (let offset = 0; offset < 6000; offset += 500) {
+        let request = client.from('home_demand_estimate').select('*').order('time').range(offset, offset + 499);
+        if (rows.length) request = request.eq('latest_reading', rows[0].latest_reading);
+        const page = await query(request);
+        rows.push(...page);
+        if (page.length < 500) break;
+      }
+      return rows;
     },
     async readForecast() {
       if (!client) throw new Error('Connect to Supabase first.');
