@@ -433,7 +433,7 @@
       const data = await cloud.readControl();
       if (connection !== generation) return;
       render(data ? {
-        strategy: 'Plan backwards to protect the battery reserve. Schedule only the grid energy needed during the allowed hours, up to the grid charge target cap. Solar charges the battery first and can raise SOC above the grid charge cap up to the operating maximum.',
+        strategy: 'Use the allowed grid windows to keep SOC above the battery reserve until forecast net solar can recharge the battery or grid charging is available again. Carry extra energy through a solar period only if its forecast surplus is insufficient to reach the following opportunity. The grid charge cap still applies.',
         ...data,
       } : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
       status.hidden = false;
