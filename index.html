@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=1016">
+  <link rel="stylesheet" href="./dashboard.css?v=1028">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -54,6 +54,8 @@
         <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
         <p id="demand-forecast-status" role="status" hidden></p>
         <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
+        <p id="demand-error-status" role="status" hidden></p>
+        <svg id="demand-error-chart" role="img" aria-label="Six-hour home demand forecast errors" hidden></svg>
       </section>
       <section class="solar-card" id="solar-control" aria-labelledby="solar-command-title" hidden>
         <div class="solar-section-heading solar-command-heading">
@@ -222,10 +224,10 @@
 </main>
 <script src="./dashboard-data.js?v=608"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=1027"></script>
+<script src="./cloud.js?v=1040"></script>
 
-<script src="./forecast-chart.js?v=1027"></script>
-<script src="./cloud-forecast.js?v=1027"></script>
+<script src="./forecast-chart.js?v=1040"></script>
+<script src="./cloud-forecast.js?v=1040"></script>
 <script src="./command-chart.js?v=1016"></script>
 <script src="./dashboard.js?v=964"></script>
 </body>

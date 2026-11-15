@@ -19,7 +19,15 @@
       'FD2324F695 System Data ' + month + '.csv');
   }
   let client;
+  let newestSample = -Infinity;
+  let stopSampleWatch;
   const table = () => client.from('energy_readings');
+  function publishSample(row) {
+    const time = Date.parse(row?.time);
+    if (!Number.isFinite(time) || time <= newestSample) return;
+    newestSample = time;
+    window.dispatchEvent(new CustomEvent('energy-cloud-sample', { detail: stamp(row) }));
+  }
   async function query(request) {
     const { data, error } = await request;
     if (error) throw error;
@@ -55,6 +63,31 @@
       cursor = page.at(-1).time;
     }
   }
+  async function forecastSnapshot(tableName, columns, versionFields = []) {
+    if (!client) throw new Error('Connect to Supabase first.');
+    const source = client;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rows = [];
+      let cursor;
+      let version = [];
+      for (;;) {
+        let request = source.from(tableName).select(columns).order('time').limit(500);
+        if (cursor !== undefined) request = request.gt('time', cursor);
+        for (const [key, value] of version) request = request.eq(key, value);
+        const page = await query(request);
+        if (client !== source) throw new Error('The Supabase connection changed.');
+        if (!page.length) break;
+        if (!rows.length) version = versionFields.filter(key => page[0][key] != null).map(key => [key, page[0][key]]);
+        rows.push(...page);
+        cursor = page.at(-1).time;
+      }
+      if (!version.length) return rows;
+      const [latest] = await query(source.from(tableName).select(columns).order('time', { ascending: false }).limit(1));
+      if (client !== source) throw new Error('The Supabase connection changed.');
+      if (latest && version.every(([key, value]) => latest[key] === value)) return rows;
+    }
+    throw new Error('The NAS is updating the forecast. Try refreshing again.');
+  }
   window.energyCloud = {
     start(refresh) {
       function connect() {
@@ -73,7 +106,15 @@
           localStorage.setItem(prefix + 'key', token);
           form.hidden = true;
           dashboard.hidden = false;
+          stopSampleWatch?.();
+          newestSample = -Infinity;
           window.dispatchEvent(new Event("energy-cloud-connected"));
+          const source = client;
+          const channel = source.channel('forecast:energy_readings')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'energy_readings' }, change => {
+              if (client === source) publishSample(change.new);
+            }).subscribe();
+          stopSampleWatch = () => source.removeChannel(channel);
           refresh();
         } catch {
           document.getElementById('cloud-error').textContent = 'Enter your HTTPS project URL and publishable or legacy anon key.';
@@ -127,26 +168,26 @@
       return () => source.removeChannel(channel);
     },
     async readDemandForecast() {
-      if (!client) throw new Error('Connect to Supabase first.');
-      const rows = [];
-      for (let offset = 0; offset < 6000; offset += 500) {
-        let request = client.from('home_demand_estimate').select('*').order('time').range(offset, offset + 499);
-        if (rows.length) request = request.eq('latest_reading', rows[0].latest_reading);
-        const page = await query(request);
-        rows.push(...page);
-        if (page.length < 500) break;
-      }
-      return rows;
+      return forecastSnapshot('home_demand_estimate', '*', ['chart_as_of', 'latest_reading']);
     },
     async readForecast() {
-      if (!client) throw new Error('Connect to Supabase first.');
-      return query(client.from('solar_generation_estimate')
-        .select('time,measured_kw,ai_past_estimate_kw,ai_forecast_kw,forecast_download_utc,timezone,model_name')
-        .order('time'));
+      return forecastSnapshot('solar_generation_estimate', '*', ['chart_as_of', 'forecast_download_utc']);
+    },
+    async readDemandErrors() {
+      try {
+        return await forecastSnapshot('demand_error',
+          'time,block_end,day,period,range_low_kwh,range_high_kwh,measured_kwh,error_kwh');
+      } catch (error) {
+        if (error.code === '42P01' || error.code === 'PGRST205') return [];
+        throw error;
+      }
     },
     async read(selectedDate) {
       if (!client) return;
+      const source = client;
       const [latest] = await query(table().select('*').order('time', { ascending: false }).limit(1));
+      if (client !== source) return;
+      publishSample(latest);
       const date = [selectedDate || '9999', latest ? stamp(latest).slice(0, 10) : new Date().toISOString().slice(0, 10)].sort()[0];
       if (!latest) return { date };
       const day = new Date(date + 'T00:00:00Z');
