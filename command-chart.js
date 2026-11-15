@@ -17,6 +17,13 @@
   const schedule = get('schedule');
   const defaults = get('defaults');
   const sources = get('sources');
+  const buttonStatusMessage = get('button-status-message');
+  const buttonSwitches = get('button-switches');
+  const buttonSlots = get('button-slots');
+  const buttonTimestamp = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+  });
   const namespace = 'http://www.w3.org/2000/svg';
   let loading = false;
   let pending = false;
@@ -410,6 +417,57 @@
     sources.hidden = !provenance.length;
   }
 
+  function showButtonStatus(snapshot, unavailable = 'Waiting for the NAS button status.') {
+    const timestamp = Date.parse(snapshot?.updated_at);
+    const valid = Number.isFinite(timestamp) && Array.isArray(snapshot?.charge_slots)
+      && snapshot.charge_slots.every(index => Number.isInteger(index) && index >= 0 && index < 48)
+      && ['automatic', 'inverter_control', 'direct_charge', 'direct_discharge']
+        .every(key => typeof snapshot[key] === 'boolean');
+    buttonSwitches.hidden = buttonSlots.hidden = !valid;
+    buttonSwitches.replaceChildren();
+    buttonSlots.replaceChildren();
+    if (!valid) {
+      buttonStatusMessage.textContent = snapshot ? 'The NAS button snapshot is incomplete.' : unavailable;
+      return;
+    }
+
+    const stale = Date.now() - timestamp > 5 * 60 * 1000;
+    buttonStatusMessage.textContent = (stale ? 'Last known state · ' : 'NAS snapshot · ') + buttonTimestamp.format(timestamp);
+    const switches = [
+      ['Mode', snapshot.automatic ? 'Automatic' : 'Manual'],
+      ['Inverter control', snapshot.inverter_control ? 'On' : 'Off'],
+      ['Battery charging', snapshot.direct_charge ? 'On' : 'Off'],
+      ['Discharge to grid', snapshot.direct_discharge ? 'On' : 'Off'],
+    ];
+    for (const [name, value] of switches) {
+      const pair = html('div');
+      pair.append(html('dt', name), html('dd', value));
+      buttonSwitches.append(pair);
+    }
+
+    const selected = new Set(snapshot.charge_slots);
+    for (let index = 0; index < 48; index++) {
+      const minutes = (120 + index * 30) % 1440;
+      const clock = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+      const charge = selected.has(index);
+      const state = charge ? 'Charge' : 'Normal';
+      const slot = html('li', clock);
+      slot.dataset.state = charge ? 'charge' : 'normal';
+      slot.title = clock + ' · ' + state;
+      slot.setAttribute('aria-label', clock + ', ' + state);
+      buttonSlots.append(slot);
+    }
+  }
+
+  async function refreshButtonStatus(connection) {
+    try {
+      const snapshot = await cloud.readControlButtonStatus();
+      if (connection === generation) showButtonStatus(snapshot);
+    } catch {
+      if (connection === generation) showButtonStatus(null, 'NAS button status is unavailable.');
+    }
+  }
+
   async function refresh() {
     if (panel.hidden || document.hidden) return;
     if (loading) { pending = true; return; }
@@ -417,6 +475,7 @@
     loading = true;
     button.disabled = true;
     panel.setAttribute('aria-busy', 'true');
+    const buttonStatus = refreshButtonStatus(connection);
     try {
       const data = await cloud.readControl();
       if (connection !== generation) return;
@@ -434,6 +493,7 @@
         status.hidden = false;
       }
     } finally {
+      await buttonStatus;
       loading = false;
       button.disabled = false;
       panel.removeAttribute('aria-busy');
@@ -448,6 +508,7 @@
     clearTimeout(updateTimer);
     stopWatching?.();
     render({});
+    showButtonStatus(null);
     status.hidden = true;
     stopWatching = cloud.watchControl(() => {
       clearTimeout(updateTimer);

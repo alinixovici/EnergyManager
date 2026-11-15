@@ -160,6 +160,15 @@
       }
       throw new Error('The NAS is updating the Control plan. Try refreshing again.');
     },
+    async readControlButtonStatus() {
+      if (!client) throw new Error('Connect to Supabase first.');
+      const source = client;
+      const status = await query(source.from('control_button_status')
+        .select('updated_at,automatic,inverter_control,direct_charge,direct_discharge,charge_slots')
+        .order('updated_at', { ascending: false }).limit(1).maybeSingle());
+      if (client !== source) throw new Error('The Supabase connection changed.');
+      return status;
+    },
     watchForecast(table, refresh) {
       const source = client;
       const channel = source.channel('forecast:' + table)

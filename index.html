@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=1029">
+  <link rel="stylesheet" href="./dashboard.css?v=1030">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -76,6 +76,12 @@
             <p class="solar-caption">Positive energy shows solar generation and battery charging from the grid. Negative energy shows household demand.</p>
           </figcaption>
         </figure>
+        <section class="solar-command-details" id="solar-command-button-status" aria-labelledby="solar-command-button-status-title">
+          <h3 id="solar-command-button-status-title">NAS control buttons</h3>
+          <p id="solar-command-button-status-message" role="status">Waiting for the NAS button status.</p>
+          <dl id="solar-command-button-switches" hidden></dl>
+          <ul id="solar-command-button-slots" aria-label="Half-hour charging selections" hidden></ul>
+        </section>
         <section class="solar-command-details" id="solar-command-strategy" aria-labelledby="solar-command-strategy-title" hidden>
           <h3 id="solar-command-strategy-title">Proposed charging strategy</h3>
           <p id="solar-command-decision"></p>
@@ -224,11 +230,11 @@
 </main>
 <script src="./dashboard-data.js?v=608"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=1040"></script>
+<script src="./cloud.js?v=1041"></script>
 
 <script src="./forecast-chart.js?v=1042"></script>
 <script src="./cloud-forecast.js?v=1040"></script>
-<script src="./command-chart.js?v=1017"></script>
+<script src="./command-chart.js?v=1018"></script>
 <script src="./dashboard.js?v=964"></script>
 </body>
 </html>
