@@ -29,8 +29,8 @@
     estimatedSoc: { label: 'Historical SOC estimate', color: '#c34c12', dash: '6 4' },
     forecastSoc: { label: 'SOC with proposed grid charge', color: '#6235a7', weight: 3 },
     unchargedSoc: { label: 'SOC without proposed grid charge', color: '#087f57', dash: '7 5' },
-    reserve: { label: 'Battery reserve', color: '#ac233b', dash: '8 3 2 3' },
-    gridTarget: { label: 'Grid charge cap', color: '#905600', dash: '3 4' },
+    reserve: { label: 'Battery reserve', color: '#000', dash: '6 4' },
+    gridTarget: { label: 'Grid charge cap', color: '#000', dash: '6 4' },
     measuredDemand: { label: 'Demand measured', color: '#0072b2' },
     estimatedDemand: { label: 'Demand estimated', color: '#c34c12', dash: '6 4' },
     forecastDemand: { label: 'Demand forecast', color: '#6235a7' },
@@ -154,17 +154,6 @@
     }
 
     label(left, 27, 'Battery state of charge (%)', 'start', 17, 650);
-    if (limits.length) {
-      const boxX = 354, columnWidth = 204;
-      svg('rect', { x: boxX, y: 7, width: columnWidth * limits.length, height: 28,
-        rx: 5, fill: '#fff', stroke: '#c4cfc8' });
-      limits.forEach((limit, index) => {
-        const [, appearance] = limit;
-        const start = boxX + 12 + columnWidth * index;
-        line(start, 21, start + 26, 21, appearance.color, 2, appearance.dash);
-        label(start + 34, 26, limitLabel(limit), 'start', 14, 650, appearance.color);
-      });
-    }
     label(left, energyTop - 16, 'Solar, demand and grid charging', 'start', 17, 650);
     label(right, energyTop - 16, 'Today’s estimate includes the remaining forecast', 'end', 12);
     for (const [index, day] of days.entries()) {
@@ -286,8 +275,7 @@
     }
 
     for (const [value, appearance] of limits) {
-      const weight = data.reserve === data.target && appearance === lines.reserve ? 3 : 1.6;
-      line(left, socY(value), right, socY(value), appearance.color, weight, appearance.dash);
+      line(left, socY(value), right, socY(value), appearance.color, 1.6, appearance.dash);
     }
     const historyGap = minuteHistory ? 300 : 3601;
     socPath(socHistory, 'soc', lines.measuredSoc, historyGap);
