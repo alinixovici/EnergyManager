@@ -77,8 +77,9 @@ const SolarGeneration = (() => {
     const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.29;
     const spacing = ceiling / 9;
     const magnitude = 10 ** Math.floor(Math.log10(spacing));
-    const step = [1, 2, 2.5, 5, 10].find(value => value * magnitude >= spacing) * magnitude;
-    const decimals = Math.max(2, Number(step.toPrecision(8)).toString().split('.')[1]?.length ?? 0);
+    const niceStep = [1, 2, 2.5, 5, 10].find(value => value * magnitude >= spacing) * magnitude;
+    const step = demand ? Math.ceil(niceStep * 100 - 1e-9) / 100 : niceStep;
+    const decimals = demand ? 2 : Math.max(2, Number(step.toPrecision(8)).toString().split('.')[1]?.length ?? 0);
     const x = time => left + (time - start) / (end - start) * (right - left);
     const y = power => bottom - power / ceiling * (bottom - top);
 
@@ -243,7 +244,7 @@ const SolarGeneration = (() => {
         const liveMeasured = rawToday && name === 'Measured so far';
         label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, { fill: color });
         label(cardX + cardWidth - 10 * scale, rowY,
-          amount === null ? '—' : amount.toFixed(liveMeasured ? 4 : 2) + ' kWh',
+          amount === null ? '—' : amount.toFixed(2) + ' kWh',
           'end', (liveMeasured ? 12.5 : 15) * scale, 700, { fill: color });
       });
     }
