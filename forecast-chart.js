@@ -241,11 +241,10 @@ const SolarGeneration = (() => {
         fill: '#fff', stroke: '#CBD8E2', 'stroke-width': 1 });
       metrics.forEach(([name, amount, color], i) => {
         const rowY = top + 5 + (20 + i * 20) * scale;
-        const liveMeasured = rawToday && name === 'Measured so far';
         label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, { fill: color });
         label(cardX + cardWidth - 10 * scale, rowY,
           amount === null ? '—' : amount.toFixed(2) + ' kWh',
-          'end', (liveMeasured ? 12.5 : 15) * scale, 700, { fill: color });
+          'end', 15 * scale, 700, { fill: color });
       });
     }
     label((left + right) / 2, bottom + 72, data.timezone === 'Europe/London'
