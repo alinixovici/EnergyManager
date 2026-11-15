@@ -249,7 +249,7 @@
 #solar-dashboard #solar-command-figure { margin: 12px 0 0; }
 #solar-dashboard .solar-command-scroll { max-width: 100%; overflow-x: auto; }
 #solar-dashboard #solar-command-chart {
-  display: block; width: 100%; min-width: 730px; height: auto; background: #fff; border: 1px solid var(--solar-edge);
+  display: block; width: 75%; min-width: 730px; height: auto; background: #fff; border: 1px solid var(--solar-edge);
   border-radius: 6px; color: #202c29; font-family: inherit; font-variant-numeric: tabular-nums;
 }
 #solar-dashboard #solar-command-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 7px 0 3px; }
