@@ -139,7 +139,7 @@
     chart.classList.toggle('is-pannable', Boolean(rows.length) && handTool.getAttribute('aria-pressed') === 'true');
     if (!rows.length) return;
 
-    const left = 56, right = width - 42, top = 20, bottom = height - 34;
+    const left = data.figureLayout.left, right = width - data.figureLayout.right, top = 20, bottom = height - 34;
     const first = rows[0].minute;
     const duration = rows.at(-1).minute - first;
     const padding = Math.max(5, Math.ceil(duration * 0.03));

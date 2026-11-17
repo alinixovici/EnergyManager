@@ -12,6 +12,7 @@
   const dailyCharge = get('daily-charge');
   const figure = get('figure');
   const chart = get('chart');
+  const { figureLayout, responsiveFigureWidth } = window.solarDashboardData;
   const legend = get('legend');
   const asOf = get('as-of');
   const windows = get('windows');
@@ -138,10 +139,11 @@
     const hasCursor = Number.isFinite(data.cutoff) && data.cutoff >= start && data.cutoff <= end;
     const cursor = window.SolarLoggerCursor;
     const cursorSpace = hasCursor && cursor ? cursor.height + 4 : 0;
-    const left = 76, right = 1156, socHeader = 43, top = socHeader + cursorSpace;
-    const socBottom = top + 204;
+    const width = responsiveFigureWidth(chart, () => draw(data, formatters));
+    const left = figureLayout.left, right = width - figureLayout.right, socHeader = 43, top = socHeader + cursorSpace;
+    const socBottom = top + figureLayout.plotHeight;
     const energyTop = socBottom + 76, energyHeader = energyTop + 75;
-    const energyPlotTop = energyHeader + cursorSpace, energyBottom = energyPlotTop + 213;
+    const energyPlotTop = energyHeader + cursorSpace, energyBottom = energyPlotTop + figureLayout.plotHeight;
     const plotBottoms = [socBottom, energyBottom];
     const x = stamp => left + (stamp - start) / (end - start) * (right - left);
     const socY = value => socBottom - value / 110 * (socBottom - top);
@@ -164,7 +166,7 @@
       .filter(([value]) => Number.isFinite(value));
     const limitLabel = ([value, appearance]) => appearance.label + ' ' + value + '%';
 
-    chart.setAttribute('viewBox', '0 0 1176 ' + (energyBottom + 54));
+    chart.setAttribute('viewBox', '0 0 ' + width + ' ' + (energyBottom + 54));
     svg('title', { id: 'solar-command-chart-title' }, 'Battery SOC and energy forecast');
     svg('desc', { id: 'solar-command-chart-desc' },
       ['The dotted vertical line marks the latest battery SOC reading. Solar and grid charge are positive and household demand is negative.',
@@ -173,29 +175,30 @@
     const line = (x1, y1, x2, y2, stroke = '#d5ddd8', weight = 1, dash) => {
       svg('line', { x1, y1, x2, y2, stroke, 'stroke-width': weight, ...(dash ? { 'stroke-dasharray': dash } : {}) });
     };
-    const label = (x, y, text, anchor = 'start', size = 13, weight = 400, fill = '#33443e') =>
+    const label = (x, y, text, anchor = 'start', size = figureLayout.label, weight = 400, fill = '#33443e') =>
       svg('text', { x, y, 'text-anchor': anchor, 'font-size': size, 'font-weight': weight, fill }, text);
 
     function dailyEnergyCard(center, span, rows) {
       const baseWidth = 248;
       const width = Math.min(baseWidth, span - 10);
       const scale = width / baseWidth;
+      const textScale = Math.min(1, width / 182);
       const cardX = center - width / 2;
       const y = energyTop + 5;
       const valueX = [cardX + 173 * scale, cardX + width - 10 * scale];
       svg('rect', { x: cardX, y, width, height: (26 + 20 * rows.length) * scale,
         rx: 7 * scale, fill: '#fff', stroke: '#cbd8e2' });
       ['Demand (kWh)', 'Solar (kWh)'].forEach((heading, i) =>
-        label(valueX[i], y + 15 * scale, heading, 'end', 11 * scale, 650));
+        label(valueX[i], y + 15 * scale, heading, 'end', figureLayout.label * textScale, 650));
       rows.forEach(({ name, color, values }, i) => {
         const rowY = y + (34 + 20 * i) * scale;
-        label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, color);
-        values.forEach((value, j) => label(valueX[j], rowY, value, 'end', 15 * scale, 700, color));
+        label(cardX + 10 * scale, rowY, name, 'start', figureLayout.label * textScale, 400, color);
+        values.forEach((value, j) => label(valueX[j], rowY, value, 'end', figureLayout.value * textScale, 650, color));
       });
     }
 
-    label(left, 27, 'Battery state of charge (%)', 'start', 17, 650);
-    label(left, energyTop - 16, 'Solar, demand and grid charging', 'start', 17, 650);
+    label(left, 27, 'Battery state of charge (%)', 'start', figureLayout.title, 650);
+    label(left, energyTop - 16, 'Solar, demand and grid charging', 'start', figureLayout.title, 650);
     label(right, energyTop - 16, 'Today’s estimate includes the remaining forecast', 'end', 12);
     for (const [index, day] of days.entries()) {
       const next = days[index + 1] ?? end;
@@ -229,7 +232,7 @@
       const span = x(next) - x(day);
       if (labelledDays.has(day)) {
         const date = formatters.day.format(day * 1000);
-        for (const bottom of plotBottoms) label(center, bottom + 37, date, 'middle', 13, 650);
+        for (const bottom of plotBottoms) label(center, bottom + 37, date, 'middle', figureLayout.label, 650);
       }
       if (span < 135) continue;
 

@@ -212,7 +212,24 @@
     })) : [];
   }
 
-  window.solarDashboardData = { filePairs, latest, history, points, batteryPlanForecast };
+  const figureLayout = { left: 76, right: 40, plotHeight: 240, title: 17, label: 12, value: 14 };
+  const figureWidths = new WeakMap();
+
+  function responsiveFigureWidth(svg, redraw) {
+    let layout = figureWidths.get(svg);
+    if (!layout) {
+      layout = {};
+      figureWidths.set(svg, layout);
+      new ResizeObserver(() => {
+        if (svg.clientWidth && svg.clientWidth !== layout.width) layout.redraw();
+      }).observe(svg);
+    }
+    layout.width = svg.clientWidth || 900;
+    layout.redraw = redraw;
+    return layout.width;
+  }
+
+  window.solarDashboardData = { filePairs, latest, history, points, batteryPlanForecast, figureLayout, responsiveFigureWidth };
 })();
 
 (() => {
@@ -347,8 +364,8 @@
       : Math.max(left, Math.min(x - width / 2, right - width));
     const badge = append(svg, 'g', { class: 'solar-cursor-label', 'pointer-events': 'none' });
     append(badge, 'rect', { x: boxX, y: top, width, height, fill: '#fff', opacity: 0.95 });
-    const style = { x: boxX + width - 5, 'text-anchor': 'end', 'font-family': 'DejaVu Sans, Verdana, sans-serif',
-      'font-size': 13, 'font-weight': 700, fill: '#34465A' };
+    const style = { x: boxX + width - 5, 'text-anchor': 'end',
+      'font-size': 12, 'font-weight': 650, fill: '#34465A' };
     append(badge, 'text', { ...style, y: top + 15 }, day + month);
     append(badge, 'text', { ...style, y: top + 30 }, clock.format(timestamp) + ':');
   }

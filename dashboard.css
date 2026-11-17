@@ -14,6 +14,7 @@
 #solar-console [hidden] { display: none !important; }
 #solar-console :focus-visible { outline: 2px solid var(--solar-accent); outline-offset: 2px; }
 #solar-dashboard { container: solar-dashboard / inline-size; }
+#solar-dashboard :is(#solar-power-chart, #solar-forecasts svg, #solar-command-chart, #solar-flow-pv-power, .solar-battery-card) { font-variant-numeric: tabular-nums; }
 #solar-dashboard :is(h1, h2, p, dl, dd) { margin: 0; }
 #solar-dashboard h1 { margin: 2px 0 4px; font-size: clamp(26px, 4cqw, 36px); line-height: 1.12; letter-spacing: -.035em; }
 #solar-dashboard h2 { font-size: 17px; line-height: 1.25; font-weight: 650; }
@@ -130,7 +131,7 @@
   gap: 3px 8px; min-height: 45px; margin-block: 2px;
   padding: 4px 8px; border: 1px solid var(--solar-edge); border-radius: 8px; background: var(--solar-surface);
 }
-#solar-dashboard .solar-route-destinations dd { margin: 0; text-align: end; font-size: clamp(13px, 1.7cqw, 17px); font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#solar-dashboard .solar-route-destinations dd { margin: 0; text-align: end; font-size: 14px; font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #solar-dashboard .solar-battery-card { background: #f1ebf5; }
 #solar-dashboard .solar-soc { display: flex; align-items: baseline; gap: 8px; padding: 4px 0 7px; }
 #solar-dashboard .solar-soc strong { color: var(--solar-battery-ink); font-size: 52px; line-height: 1.1; letter-spacing: -.055em; font-weight: 650; }
@@ -160,11 +161,11 @@
 #solar-dashboard #solar-chart-hand-note { color: var(--solar-muted); font-size: 11px; }
 #solar-dashboard .solar-x-range-label { color: var(--solar-muted); font-size: 11px; margin-left: 5px; }
 #solar-dashboard .solar-chart-controls .solar-x-range[aria-pressed="true"] { color: var(--solar-accent); background: var(--solar-soft); border-color: var(--solar-accent); }
-#solar-dashboard .solar-plot { position: relative; flex: 1; min-height: 222px; margin: 5px 0; }
+#solar-dashboard .solar-plot { position: relative; flex: 0 0 294px; margin: 5px 0; }
 #solar-dashboard #solar-power-chart { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
 #solar-dashboard #solar-power-chart.is-pannable { cursor: grab; touch-action: none; user-select: none; }
 #solar-dashboard #solar-power-chart.is-dragging { cursor: grabbing; }
-#solar-dashboard #solar-power-chart text { fill: var(--solar-muted); font: 11px "Segoe UI", system-ui, sans-serif; }
+#solar-dashboard #solar-power-chart text { fill: var(--solar-muted); font-size: 12px; }
 #solar-dashboard .solar-soc-line { stroke-dasharray: 5 4; }
 #solar-dashboard .solar-gridline { stroke: var(--solar-edge); stroke-width: 1; }
 #solar-dashboard .solar-zero { stroke: #aab7ae; stroke-width: 1.4; }
@@ -187,7 +188,7 @@
 #solar-dashboard .solar-inverter-power { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 #solar-dashboard .solar-inverter-power div { padding: 6px 8px; background: var(--solar-soft); border-radius: 6px; }
 #solar-dashboard .solar-inverter-power dt { color: var(--solar-muted); font-size: 11px; }
-#solar-dashboard .solar-inverter-power dd { font-size: 1.4rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#solar-dashboard .solar-inverter-power dd { text-align: end; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 #solar-dashboard .solar-inverter tbody tr:nth-child(odd) { background: var(--solar-soft); }
 #solar-dashboard #solar-overview[hidden] { display: none; }
 #solar-dashboard nav[aria-label="Dashboard sections"] { display: flex; gap: 8px; margin: 12px 0; }
@@ -217,16 +218,17 @@
 
 .forecast-tabs { display: flex; gap: .5rem; margin-bottom: .75rem; }
 .forecast-tabs button[aria-pressed="true"] { font-weight: 700; outline: 2px solid currentColor; }
-#solar-dashboard #solar-forecasts > svg { display: block; width: 75%; height: auto; margin-inline: auto; }
+#solar-dashboard .solar-forecast-scroll { max-width: 100%; overflow-x: auto; }
+#solar-dashboard .solar-forecast-scroll:has(> svg[hidden]) { display: none; }
+#solar-dashboard .solar-forecast-scroll svg { display: block; width: 100%; min-width: 900px; height: auto; }
 #solar-dashboard #demand-error-chart-scroll {
-  width: min(100%, max(75%, 1000px)); margin-inline: auto; overflow-x: auto;
+  width: 100%; overflow-x: auto;
 }
 #solar-dashboard #demand-error-chart {
   display: block; width: 100%; min-width: 1000px; height: auto;
 }
 
 #solar-dashboard .solar-command-heading { align-items: start; }
-#solar-dashboard #solar-command-title { font-size: 22px; }
 #solar-dashboard #solar-command-as-of:empty { display: none; }
 #solar-dashboard .solar-command-summary {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
@@ -277,7 +279,7 @@
 #solar-dashboard #solar-command-figure { margin: 12px 0 0; }
 #solar-dashboard .solar-command-scroll { max-width: 100%; overflow-x: auto; }
 #solar-dashboard #solar-command-chart {
-  display: block; width: 100%; min-width: 730px; height: auto; background: #fff; border: 1px solid var(--solar-edge);
+  display: block; width: 100%; min-width: 900px; height: auto; background: #fff; border: 1px solid var(--solar-edge);
   border-radius: 6px; color: #202c29; font-family: inherit; font-variant-numeric: tabular-nums;
 }
 #solar-dashboard #solar-command-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 7px 0 3px; }
@@ -290,7 +292,6 @@
 #solar-dashboard .solar-command-details :is(ul, p) { margin: 4px 0; overflow-wrap: anywhere; }
 #solar-dashboard .solar-command-details ul { padding-inline-start: 19px; }
 #solar-dashboard .solar-command-details summary { cursor: pointer; font-weight: 650; }
-#solar-dashboard #solar-command-button-status { inline-size: min(100%, max(75%, 730px)); }
 #solar-dashboard #solar-command-button-status-message { color: var(--solar-muted); font-size: 12px; }
 #solar-dashboard #solar-command-button-switches {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; margin: 8px 0;

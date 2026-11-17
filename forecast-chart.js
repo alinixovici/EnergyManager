@@ -1,7 +1,7 @@
 'use strict';
 
 const SolarGeneration = (() => {
-  const frame = { width: 1200, left: 108, right: 1176, top: 82 };
+  const { figureLayout, responsiveFigureWidth } = window.solarDashboardData;
   const plotColors = { day: '#EEF2F5', grid: '#DDE3E7', axis: '#BBC4CB', boundary: '#BCC7CE' };
 
   function svgElement(parent, tag, attributes, text) {
@@ -12,14 +12,13 @@ const SolarGeneration = (() => {
     return node;
   }
 
-  function chartElements(svg, height, width = frame.width) {
+  function chartElements(svg, height, width) {
     svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-    svg.setAttribute('font-family', 'DejaVu Sans, Verdana, sans-serif');
     const element = (tag, attributes, text) => svgElement(svg, tag, attributes, text);
     function line(x1, y1, x2, y2, stroke, size = 1, dash = '') {
       element('line', { x1, y1, x2, y2, stroke, 'stroke-width': size, 'stroke-dasharray': dash });
     }
-    function label(x, y, text, anchor = 'start', size = 13, weight = 400, extra = {}) {
+    function label(x, y, text, anchor = 'start', size = figureLayout.label, weight = 400, extra = {}) {
       element('text', { x, y, 'text-anchor': anchor, 'font-size': size, 'font-weight': weight, fill: '#000', ...extra }, text);
     }
     element('rect', { width, height, fill: '#fff' });
@@ -93,8 +92,9 @@ const SolarGeneration = (() => {
     const inWindow = time => Number.isFinite(time) && time >= start && time < end;
     const liveCursor = inWindow(cursorTime);
     const cursor = liveCursor ? cursorTime : inWindow(cutoff) ? cutoff : null;
-    const { width, left, right, top } = frame;
-    const height = 522, bottom = 387;
+    const width = responsiveFigureWidth(svg, () => draw(svg, data, cursorTime));
+    const left = figureLayout.left, right = width - figureLayout.right, top = 82;
+    const bottom = top + figureLayout.plotHeight, height = bottom + 135;
     const timezone = { timeZone: data.timezone };
     const calendar = new Intl.DateTimeFormat('en-GB', { ...timezone, day: 'numeric', month: 'short' });
     const clock = new Intl.DateTimeFormat('en-GB', { ...timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
@@ -115,7 +115,7 @@ const SolarGeneration = (() => {
     const x = time => left + (time - start) / (end - start) * (right - left);
     const y = power => bottom - power / ceiling * (bottom - top);
 
-    const { element, line, label } = chartElements(svg, height);
+    const { element, line, label } = chartElements(svg, height, width);
     const title = demand ? 'Home demand forecast' : 'Solar generation forecast';
     const modelFile = typeof data.model_name === 'string' ? data.model_name.trim() : '';
     const modelLabel = typeof data.model_label === 'string' ? data.model_label.trim() : '';
@@ -135,12 +135,12 @@ const SolarGeneration = (() => {
       && data.last_run_at !== data.forecast_issued_at ? ` · Input issue ${forecastTime(data.forecast_issued_at)}` : '';
     const subtitle = `Model ${model} · Last forecast ${lastForecast}${inputIssue}`;
     svg.setAttribute('aria-label', `${title}. ${subtitle}`);
-    label(left, 42, title, 'start', 24, 700);
-    label(left, 65, subtitle, 'start', 14, 400, { fill: '#34465A' });
+    label(left, 42, title, 'start', figureLayout.title, 650);
+    label(left, 65, subtitle, 'start', figureLayout.label, 400, { fill: '#34465A' });
     const intervalSeconds = demand ? (data.interval_minutes || 60) * 60 : 3600;
     const axisMiddle = (top + bottom) / 2;
-    label(61, axisMiddle, demand ? ((data.interval_minutes || 60) === 60 ? 'Hourly home demand (kWh)' : 'Home demand per ' + (data.interval_minutes || 60) + ' min (kWh)') : 'Hourly mean DC power (kW)', 'middle', 14, 400, {
-      transform: 'rotate(-90 61 ' + axisMiddle + ')',
+    label(19, axisMiddle, demand ? ((data.interval_minutes || 60) === 60 ? 'Hourly home demand (kWh)' : 'Home demand per ' + (data.interval_minutes || 60) + ' min (kWh)') : 'Hourly mean DC power (kW)', 'middle', figureLayout.label, 400, {
+      transform: 'rotate(-90 19 ' + axisMiddle + ')',
     });
     const dayKey = new Intl.DateTimeFormat('en-CA', { ...timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
     const today = dayKey.format(Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now());
@@ -156,7 +156,7 @@ const SolarGeneration = (() => {
       line(left, y(power), right, y(power), plotColors.grid, 0.8);
       label(left - 10, y(power) + 4, power.toFixed(decimals), 'end');
     }
-    for (const [time, tick] of ticks) label(x(time), bottom + 19, tick, 'middle', 13);
+    for (const [time, tick] of ticks) label(x(time), bottom + 19, tick, 'middle', figureLayout.label);
     for (const { time, until } of days) {
       if (time > start) line(x(time), top, x(time), bottom, plotColors.boundary);
       const [day, month] = calendar.format(time * 1000).split(' ');
@@ -165,7 +165,7 @@ const SolarGeneration = (() => {
         ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[number % 10] || 'th');
       const dayLabelWidth = x(until) - x(time);
       if (dayLabelWidth >= 65) label(x((time + until) / 2), bottom + 52,
-        day + suffix + ' ' + month, 'middle', 14, 700);
+        day + suffix + ' ' + month, 'middle', figureLayout.label, 650);
     }
     line(left, top, left, bottom, plotColors.axis);
     line(left, bottom, right, bottom, plotColors.axis);
@@ -282,26 +282,26 @@ const SolarGeneration = (() => {
       const cardWidth = Math.min(202, x(until) - x(time) - 10);
       if (cardWidth < 104) continue;
       const scale = Math.min(1, cardWidth / 202);
+      const textScale = Math.min(1, cardWidth / 160);
       const cardX = center - cardWidth / 2;
       element('rect', { x: cardX, y: top + 5, width: cardWidth,
         height: (12 + metrics.length * 20) * scale, rx: 7 * scale,
         fill: '#fff', stroke: '#CBD8E2', 'stroke-width': 1 });
       metrics.forEach(([name, amount, color], i) => {
         const rowY = top + 5 + (20 + i * 20) * scale;
-        label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, { fill: color });
+        label(cardX + 10 * scale, rowY, name, 'start', figureLayout.label * textScale, 400, { fill: color });
         label(cardX + cardWidth - 10 * scale, rowY,
           Number.isFinite(amount) ? amount.toFixed(2) + ' kWh' : '—',
-          'end', 15 * scale, 700, { fill: color });
+          'end', figureLayout.value * textScale, 650, { fill: color });
       });
     }
     label((left + right) / 2, bottom + 72, data.timezone === 'Europe/London'
-      ? 'UK local time' : data.timezone + ' local time', 'middle', 14);
+      ? 'UK local time' : data.timezone + ' local time', 'middle', figureLayout.label);
     const widths = { 'Measured inverter': 178, 'AI past estimate': 167, 'AI forecast (ensemble median)': 238, Measured: 132, Estimated: 135, Forecast: 120 };
-    const total = series.reduce((sum, item) => sum + widths[item.label], 0) - 20;
-    let position = (width - total) / 2;
+    let position = left;
     for (const { color, label: title } of series) {
       line(position, height - 31, position + 27, height - 31, color, color === '#000000' ? 2.8 : 2.4);
-      label(position + 36, height - 27, title, 'start', 13);
+      label(position + 36, height - 27, title, 'start', figureLayout.label);
       position += widths[title];
     }
     const formatInterval = intervalTitle(data.timezone);
@@ -359,7 +359,7 @@ const SolarGeneration = (() => {
       timeZone: data.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
     });
     const formatInterval = intervalTitle(data.timezone);
-    const width = Math.max(1000, svg.clientWidth || frame.width);
+    const width = Math.max(1000, svg.clientWidth);
     const left = 100, right = width - 12, columnGap = 12;
     const columnWidth = (right - left - (days.length - 1) * columnGap) / days.length;
     const rowHeight = 76, panelHeight = rowHeight * periods.length;
@@ -376,7 +376,7 @@ const SolarGeneration = (() => {
     const low = Math.floor(minimum / step) * step, high = Math.ceil(maximum / step) * step;
     const fraction = value => (value - low) / (high - low);
     const ticks = Array.from({ length: Math.round((high - low) / step) + 1 }, (_, i) => low + i * step);
-    const fontSize = 11, limitGap = 8;
+    const fontSize = figureLayout.label, limitGap = 8;
     // Includes enough room for the sign and unit in the SVG chart's font.
     const textWidth = text => text.length * 7;
     const requiredGutter = (distance, room) => distance < 0.5
@@ -404,7 +404,7 @@ const SolarGeneration = (() => {
     });
 
     svg.setAttribute('aria-label', 'Six-hour home demand in ' + data.timezone + '. Ranges, measured demand and estimates use a shared kilowatt-hour scale.');
-    label(12, 26, 'Six-hour home demand forecast errors', 'start', 20, 700);
+    label(figureLayout.left, 26, 'Six-hour home demand forecast errors', 'start', figureLayout.title, 650);
 
     for (const [index, day] of days.entries()) {
       const columnLeft = left + index * (columnWidth + columnGap);
@@ -412,7 +412,7 @@ const SolarGeneration = (() => {
       const x = value => columnLeft + gutter + fraction(value) * (columnWidth - 2 * gutter);
       const firstBlock = blocks.get(day + '02:00');
       const heading = Number.isFinite(firstBlock?.start) ? date.format(firstBlock.start * 1000) : '';
-      if (heading) label(columnLeft + columnWidth / 2, bottom + 38, heading, 'middle', 14, 700);
+      if (heading) label(columnLeft + columnWidth / 2, bottom + 38, heading, 'middle', figureLayout.label, 650);
       element('rect', { x: columnLeft, y: top, width: columnWidth, height: panelHeight, fill: '#fff', stroke: plotColors.grid });
       for (const tick of ticks) {
         line(x(tick), top, x(tick), bottom, plotColors.grid, 0.7);
@@ -463,7 +463,7 @@ const SolarGeneration = (() => {
           const text = format(reference);
           rows.push({ label: hasMeasured ? 'Measured demand' : 'Estimated demand', value: text, color: measuredColor });
           marker(x(reference), markerY, hasMeasured ? 1 : 0.32);
-          label(x(reference), markerY + 22, text, 'middle', 12, 700, { fill: measuredColor, opacity: hasMeasured ? 1 : 0.55 });
+          label(x(reference), markerY + 22, text, 'middle', figureLayout.value, 650, { fill: measuredColor, opacity: hasMeasured ? 1 : 0.55 });
         }
         if (hasMeasured && estimate !== null) {
           const forecast = format(estimate);
@@ -471,7 +471,7 @@ const SolarGeneration = (() => {
           rows.push({ label: estimateLabel, value: forecast, color });
           const position = x(estimate);
           arrow(position, y - 8, color);
-          label(position, y - 22, forecast, 'middle', 12, 700, { fill: color });
+          label(position, y - 22, forecast, 'middle', figureLayout.value, 650, { fill: color });
         } else if (reference === null || hasMeasured) {
           rows.push({ label: 'Estimated demand', value: 'Unavailable' });
         }
@@ -489,14 +489,13 @@ const SolarGeneration = (() => {
       }
     }
 
-    label(width / 2, bottom + 61, 'Demand (kWh)', 'middle', 13);
+    label(width / 2, bottom + 61, 'Demand (kWh)', 'middle', figureLayout.label);
     const legendItems = [
       ['90% range', (x, y) => element('rect', { x: x - 8, y: y - 3, width: 16, height: 6, rx: 2, fill: rangeColor })],
       ['Demand', marker],
       ['Estimated', (x, y) => arrow(x, y + 5, forecastColor)],
     ];
-    const legendWidth = legendItems.reduce((total, [name]) => total + 21 + textWidth(name), 0) + 13 * (legendItems.length - 1);
-    let legendLeft = (width - legendWidth) / 2;
+    let legendLeft = left;
     const legendY = bottom + 85;
     for (const [name, symbol] of legendItems) {
       symbol(legendLeft + 8, legendY);

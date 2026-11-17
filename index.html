@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=1033">
+  <link rel="stylesheet" href="./dashboard.css?v=1034">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -51,9 +51,13 @@
       <section class="solar-card" id="solar-forecasts" aria-label="Forecasts" hidden>
         <button type="button" id="forecast-refresh">Refresh forecast</button>
         <p id="forecast-status" role="status" hidden></p>
-        <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
+        <div class="solar-forecast-scroll" tabindex="0" role="region" aria-label="Scrollable solar forecast">
+          <svg id="solar-generation-chart" role="img" aria-label="Solar generation forecast" hidden></svg>
+        </div>
         <p id="demand-forecast-status" role="status" hidden></p>
-        <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
+        <div class="solar-forecast-scroll" tabindex="0" role="region" aria-label="Scrollable home demand forecast">
+          <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
+        </div>
         <p id="demand-error-status" role="status" hidden></p>
         <div id="demand-error-chart-scroll" tabindex="0" role="region" aria-label="Scrollable four-day demand forecast" hidden>
           <svg id="demand-error-chart" role="img" aria-label="Six-hour home demand forecast errors"></svg>
@@ -222,13 +226,13 @@
   </section>
   <div id="solar-chart-tooltip" class="solar-tooltip" aria-hidden="true" hidden></div>
 </main>
-<script src="./dashboard-data.js?v=611"></script>
+<script src="./dashboard-data.js?v=612"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="./cloud.js?v=1043"></script>
 
-<script src="./forecast-chart.js?v=1055"></script>
+<script src="./forecast-chart.js?v=1056"></script>
 <script src="./cloud-forecast.js?v=1042"></script>
-<script src="./command-chart.js?v=1020"></script>
-<script src="./dashboard.js?v=966"></script>
+<script src="./command-chart.js?v=1021"></script>
+<script src="./dashboard.js?v=967"></script>
 </body>
 </html>
