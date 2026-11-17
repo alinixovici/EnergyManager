@@ -245,3 +245,144 @@
 
   window.solarDashboardData = { filePairs, latest, history, points, batteryForecast, forecastStart };
 })();
+
+(() => {
+  'use strict';
+
+  const tooltip = document.getElementById('solar-chart-tooltip');
+  const charts = new WeakMap();
+  let active;
+
+  function hide(state) {
+    state.point = null;
+    state.guide.setAttribute('visibility', 'hidden');
+    if (active === state) {
+      tooltip.hidden = true;
+      active = null;
+    }
+  }
+
+  function show(chart, state, point) {
+    const matrix = chart.getScreenCTM();
+    if (!state.lookup || !matrix || !chart.getClientRects().length) {
+      hide(state);
+      return;
+    }
+    const { x, y } = new DOMPoint(point.x, point.y).matrixTransform(matrix.inverse());
+    const result = state.lookup(x, y);
+    if (!result?.rows.length) {
+      hide(state);
+      return;
+    }
+
+    if (active && active !== state) hide(active);
+    active = state;
+    state.point = point;
+    if (result.guide) {
+      const { x: guideX, top, bottom } = result.guide;
+      state.guide.setAttribute('x1', guideX);
+      state.guide.setAttribute('x2', guideX);
+      state.guide.setAttribute('y1', top);
+      state.guide.setAttribute('y2', bottom);
+      state.guide.setAttribute('visibility', 'visible');
+      if (state.guide.parentNode !== chart) chart.append(state.guide);
+    } else {
+      state.guide.setAttribute('visibility', 'hidden');
+    }
+
+    const title = document.createElement('strong');
+    title.textContent = result.title;
+    const rows = result.rows.map(({ label, value, color }) => {
+      const row = document.createElement('div');
+      const name = document.createElement('span');
+      name.textContent = label;
+      if (color) {
+        const swatch = document.createElement('i');
+        swatch.style.backgroundColor = color;
+        name.prepend(swatch);
+      }
+      const reading = document.createElement('b');
+      reading.textContent = value;
+      row.append(name, reading);
+      return row;
+    });
+    tooltip.replaceChildren(title, ...rows);
+    tooltip.hidden = false;
+    const width = tooltip.offsetWidth;
+    const height = tooltip.offsetHeight;
+    const viewport = document.documentElement;
+    const left = point.x + width + 20 <= viewport.clientWidth ? point.x + 12 : point.x - width - 12;
+    const top = point.y + height + 20 <= viewport.clientHeight ? point.y + 12 : point.y - height - 12;
+    tooltip.style.left = Math.max(8, Math.min(left, viewport.clientWidth - width - 8)) + 'px';
+    tooltip.style.top = Math.max(8, Math.min(top, viewport.clientHeight - height - 8)) + 'px';
+  }
+
+  function attach(chart, lookup) {
+    if (!tooltip) return;
+    let state = charts.get(chart);
+    if (!state) {
+      const guide = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      guide.setAttribute('class', 'solar-chart-guide');
+      guide.setAttribute('vector-effect', 'non-scaling-stroke');
+      guide.setAttribute('aria-hidden', 'true');
+      state = { guide, point: null };
+      charts.set(chart, state);
+      chart.addEventListener('pointermove', event => {
+        if (event.pointerType !== 'touch') show(chart, state, { x: event.clientX, y: event.clientY });
+      });
+      for (const type of ['pointerleave', 'pointerdown', 'pointercancel']) {
+        chart.addEventListener(type, () => hide(state));
+      }
+    }
+    state.lookup = lookup;
+    if (state.point) show(chart, state, state.point);
+  }
+
+  function clear(chart) {
+    const state = charts.get(chart);
+    if (!state) return;
+    hide(state);
+    state.lookup = null;
+  }
+
+  for (const type of ['scroll', 'resize', 'blur']) {
+    window.addEventListener(type, () => { if (active) hide(active); }, { capture: true, passive: true });
+  }
+  window.SolarLoggerChartHover = { attach, clear };
+})();
+
+(() => {
+  'use strict';
+
+  const namespace = 'http://www.w3.org/2000/svg';
+  const width = 64, height = 34, gap = 6;
+  function append(parent, tag, attributes, content) {
+    const node = document.createElementNS(namespace, tag);
+    for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+    if (content !== undefined) node.textContent = content;
+    parent.append(node);
+    return node;
+  }
+
+  function draw(svg, { time, timeZone, x, top, left, right, before = x, after = x }) {
+    if (!Number.isFinite(time) || !Number.isFinite(x) || x < left || x > right || right - left < width) return;
+    const timestamp = time * 1000;
+    const date = new Intl.DateTimeFormat('en-GB', { timeZone, day: '2-digit', month: 'short' });
+    const clock = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    const parts = date.formatToParts(timestamp);
+    const day = parts.find(part => part.type === 'day').value;
+    const month = parts.find(part => part.type === 'month').value.slice(0, 3);
+    const leftOption = Math.min(x, before) - gap - width;
+    const rightOption = Math.max(x, after) + gap;
+    const boxX = leftOption >= left ? leftOption : rightOption + width <= right ? rightOption
+      : Math.max(left, Math.min(x - width / 2, right - width));
+    const badge = append(svg, 'g', { class: 'solar-cursor-label', 'pointer-events': 'none' });
+    append(badge, 'rect', { x: boxX, y: top, width, height, fill: '#fff', opacity: 0.95 });
+    const style = { x: boxX + width - 5, 'text-anchor': 'end', 'font-family': 'DejaVu Sans, Verdana, sans-serif',
+      'font-size': 13, 'font-weight': 700, fill: '#34465A' };
+    append(badge, 'text', { ...style, y: top + 15 }, day + month);
+    append(badge, 'text', { ...style, y: top + 30 }, clock.format(timestamp) + ':');
+  }
+
+  window.SolarLoggerCursor = { draw, height };
+})();

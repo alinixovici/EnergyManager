@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=1030">
+  <link rel="stylesheet" href="./dashboard.css?v=1031">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -55,7 +55,9 @@
         <p id="demand-forecast-status" role="status" hidden></p>
         <svg id="home-demand-chart" role="img" aria-label="Home demand forecast" hidden></svg>
         <p id="demand-error-status" role="status" hidden></p>
-        <svg id="demand-error-chart" role="img" aria-label="Six-hour home demand forecast errors" hidden></svg>
+        <div id="demand-error-chart-scroll" tabindex="0" role="region" aria-label="Scrollable four-day demand forecast" hidden>
+          <svg id="demand-error-chart" role="img" aria-label="Six-hour home demand forecast errors"></svg>
+        </div>
       </section>
       <section class="solar-card" id="solar-control" aria-labelledby="solar-command-title" hidden>
         <div class="solar-section-heading solar-command-heading">
@@ -63,10 +65,13 @@
             <h2 id="solar-command-title">Battery charge plan</h2>
             <p class="solar-caption" id="solar-command-as-of"></p>
           </div>
-          <button type="button" id="solar-command-refresh">Refresh plan</button>
+          <button type="button" id="solar-command-refresh">Reload NAS plan</button>
         </div>
-        <p id="solar-command-status" role="status" hidden></p>
-        <dl class="solar-command-windows" id="solar-command-windows" hidden></dl>
+        <div class="solar-command-summary" id="solar-command-summary" hidden>
+          <p id="solar-command-status" role="status"></p>
+          <dl id="solar-command-daily-charge" aria-label="Grid charging by day" hidden></dl>
+        </div>
+        <div class="solar-command-windows" id="solar-command-windows" hidden></div>
         <figure id="solar-command-figure" hidden>
           <div class="solar-command-scroll" tabindex="0" role="region" aria-label="Scrollable SOC and energy forecast">
             <svg id="solar-command-chart" role="img" aria-labelledby="solar-command-chart-title solar-command-chart-desc"></svg>
@@ -77,15 +82,10 @@
           </figcaption>
         </figure>
         <section class="solar-command-details" id="solar-command-button-status" aria-labelledby="solar-command-button-status-title">
-          <h3 id="solar-command-button-status-title">NAS control buttons</h3>
+          <h3 id="solar-command-button-status-title">Proposed charging strategy</h3>
           <p id="solar-command-button-status-message" role="status">Waiting for the NAS button status.</p>
           <dl id="solar-command-button-switches" hidden></dl>
           <ul id="solar-command-button-slots" aria-label="Half-hour charging selections" hidden></ul>
-        </section>
-        <section class="solar-command-details" id="solar-command-strategy" aria-labelledby="solar-command-strategy-title" hidden>
-          <h3 id="solar-command-strategy-title">Proposed charging strategy</h3>
-          <p id="solar-command-decision"></p>
-          <div class="solar-command-scroll" id="solar-command-schedule" tabindex="0" role="region" aria-label="Proposed grid-charging schedule" hidden></div>
         </section>
         <section class="solar-command-details" id="solar-command-defaults" aria-labelledby="solar-command-defaults-title" hidden>
           <h3 id="solar-command-defaults-title">Defaults used</h3>
@@ -227,14 +227,15 @@
       <footer class="solar-cloud-note"><p id="solar-cloud-status" role="status">Checking cloud save status…</p></footer>
     </div>
   </section>
+  <div id="solar-chart-tooltip" class="solar-tooltip" aria-hidden="true" hidden></div>
 </main>
-<script src="./dashboard-data.js?v=608"></script>
+<script src="./dashboard-data.js?v=609"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="./cloud.js?v=1041"></script>
 
-<script src="./forecast-chart.js?v=1042"></script>
-<script src="./cloud-forecast.js?v=1040"></script>
-<script src="./command-chart.js?v=1018"></script>
+<script src="./forecast-chart.js?v=1054"></script>
+<script src="./cloud-forecast.js?v=1041"></script>
+<script src="./command-chart.js?v=1019"></script>
 <script src="./dashboard.js?v=964"></script>
 </body>
 </html>

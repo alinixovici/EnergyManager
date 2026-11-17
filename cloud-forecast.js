@@ -6,7 +6,8 @@ function forecastChartTimestamp(value) {
 }
 
 function forecastChartNumber(value) {
-  return value == null || value === '' ? null : Number(value);
+  const number = value == null || value === '' ? NaN : Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function publishedChartWindow(row) {
@@ -18,8 +19,91 @@ function publishedChartWindow(row) {
 }
 
 function forecastChartSeries(rows, column) {
-  return rows.flatMap(row => row[column] == null
-    ? [] : [[forecastChartTimestamp(row.time), forecastChartNumber(row[column])]]);
+  return rows.flatMap(row => {
+    const time = forecastChartTimestamp(row.time), value = forecastChartNumber(row[column]);
+    return time === null || value === null ? [] : [[time, value]];
+  });
+}
+
+function publishedForecastData(rows, kind) {
+  if (!rows.length) return null;
+  const demand = kind === 'demand';
+  const metadata = demand ? rows[0] : rows.find(row => row.forecast_download_utc) ?? rows[0];
+  const cutoff = forecastChartTimestamp(metadata.latest_reading);
+  const download = forecastChartTimestamp(metadata.forecast_download_utc);
+  const bounds = publishedChartWindow(metadata);
+  const minutes = Number(metadata.interval_minutes);
+  const interval = demand && Number.isInteger(minutes) && minutes > 0 && minutes <= 60 ? minutes : 60;
+  const inputsThrough = forecastChartTimestamp(metadata.inputs_through);
+  const unit = demand ? 'kwh' : 'kw';
+  const forecast = forecastChartSeries(rows, 'ai_forecast_' + unit);
+  const first = forecastChartTimestamp(rows[0].time);
+  const last = forecastChartTimestamp(rows.at(-1).time);
+  const data = {
+    ...(bounds ?? {
+      start: first === null ? null : first - (demand ? 0 : 3600),
+      end: last === null ? null : last + (demand ? interval * 60 : 0),
+    }),
+    kind, timezone: metadata.timezone || 'Europe/London',
+    download, latest_reading: cutoff, interval_minutes: interval,
+    forecast_issued_at: demand
+      ? inputsThrough ?? (forecast.length && cutoff !== null ? Math.floor(cutoff / (interval * 60)) * interval * 60 : null)
+      : download,
+    inputs_through: inputsThrough,
+    last_run_at: forecastChartTimestamp(metadata.last_run_at),
+    model_name: metadata.model_name,
+    model_label: metadata.model_label,
+    measured: forecastChartSeries(rows, 'measured_' + unit),
+    past: forecastChartSeries(rows, 'ai_past_estimate_' + unit),
+    forecast,
+  };
+  if (demand && bounds && Object.hasOwn(metadata, 'measured_today_kwh')) {
+    data.measured_today_kwh = forecastChartNumber(metadata.measured_today_kwh);
+  }
+  return data;
+}
+
+function publishedDemandRangeBlocks(rows, demand) {
+  const interval = demand.interval_minutes * 60;
+  const estimates = new Map([...demand.past, ...demand.forecast]);
+  function blockEstimate(start, end) {
+    let estimate = 0;
+    for (let from = start; from < end;) {
+      const bin = Math.floor(from / interval) * interval;
+      const value = estimates.get(bin);
+      if (!Number.isFinite(value)) return null;
+      const until = Math.min(end, bin + interval);
+      estimate += value * (until - from) / interval;
+      from = until;
+    }
+    return estimate;
+  }
+  const blocks = rows.flatMap(row => {
+    const start = forecastChartTimestamp(row.time), end = forecastChartTimestamp(row.block_end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+    const measured = forecastChartNumber(row.measured_kwh), error = forecastChartNumber(row.error_kwh);
+    return [{
+      day: row.day, period: row.period, start, end, measured_kwh: measured, error_kwh: error,
+      range_kwh: [forecastChartNumber(row.range_low_kwh), forecastChartNumber(row.range_high_kwh)],
+      forecast_kwh: measured !== null && error !== null ? measured + error : null,
+      forecast_average_kwh: blockEstimate(start, end),
+    }];
+  });
+  if (!blocks.some(block => block.day === 'next2')) {
+    const britishOffset = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', timeZoneName: 'longOffset' });
+    const offset = time => {
+      const name = britishOffset.formatToParts(time * 1000).find(part => part.type === 'timeZoneName')?.value;
+      const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(name ?? '');
+      return match ? (match[1] === '+' ? 1 : -1) * (+match[2] * 3600 + +match[3] * 60) : 0;
+    };
+    const tomorrow = time => time + 86400 + offset(time) - offset(time + 86400);
+    for (const block of blocks.filter(entry => entry.day === 'next')) {
+      const start = tomorrow(block.start), end = tomorrow(block.end);
+      blocks.push({ ...block, day: 'next2', start, end, measured_kwh: null, error_kwh: null, forecast_kwh: null,
+        forecast_average_kwh: blockEstimate(start, end) });
+    }
+  }
+  return blocks;
 }
 
 function liveForecastChart(panel, chart, fallbackCursor = () => null) {
@@ -73,25 +157,7 @@ function liveForecastChart(panel, chart, fallbackCursor = () => null) {
         showStatus('No forecast has been published. Use Read Forecast on the NAS.');
         return;
       }
-      const metadata = rows.find(row => row.forecast_download_utc) ?? rows[0];
-      const download = forecastChartTimestamp(metadata.forecast_download_utc);
-      // Legacy solar rows are labelled by the end of their hourly interval.
-      const first = forecastChartTimestamp(rows[0].time);
-      const bounds = publishedChartWindow(metadata) ?? {
-        start: first === null ? null : first - 3600,
-        end: forecastChartTimestamp(rows.at(-1).time),
-      };
-      const result = plot.draw({
-        ...bounds,
-        timezone: metadata.timezone || 'Europe/London',
-        download,
-        forecast_issued_at: download,
-        model_name: metadata.model_name,
-        model_label: metadata.model_label,
-        measured: forecastChartSeries(rows, 'measured_kw'),
-        past: forecastChartSeries(rows, 'ai_past_estimate_kw'),
-        forecast: forecastChartSeries(rows, 'ai_forecast_kw'),
-      });
+      const result = plot.draw(publishedForecastData(rows, 'solar'));
       showStatus(result.warning);
     } catch (error) {
       if (request === generation) showStatus(error.code === '42501'
@@ -138,57 +204,57 @@ function liveForecastChart(panel, chart, fallbackCursor = () => null) {
   const panel = document.getElementById('solar-forecasts');
   const chart = document.getElementById('home-demand-chart');
   const status = document.getElementById('demand-forecast-status');
+  const errorChart = document.getElementById('demand-error-chart');
+  const errorScroll = document.getElementById('demand-error-chart-scroll');
+  const errorStatus = document.getElementById('demand-error-status');
   const plot = liveForecastChart(panel, chart, data => data.latest_reading);
   let request = 0;
   let loading = false;
   let pending = false;
   let refreshTimer;
-  let unsubscribe;
+  let subscriptions = [];
+  let errorData;
+  let errorWidth;
+
+  function drawErrors() {
+    errorWidth = errorChart.clientWidth;
+    errorScroll.hidden = !errorData || !SolarGeneration.drawErrors(errorChart, errorData);
+  }
+
+  new ResizeObserver(() => {
+    if (errorData && errorChart.clientWidth && errorChart.clientWidth !== errorWidth) drawErrors();
+  }).observe(errorChart);
+
   async function loadDemand() {
     if (panel.hidden || document.hidden) return;
     if (loading) { pending = true; return; }
     loading = true;
     const id = ++request;
     try {
-      const rows = await window.energyCloud.readDemandForecast();
+      const [demand, diagnostics] = await Promise.allSettled([
+        window.energyCloud.readDemandForecast(), window.energyCloud.readDemandErrors(),
+      ]);
       if (id !== request) return;
-      if (!rows.length) {
+      if (demand.status === 'rejected') throw demand.reason;
+      const data = publishedForecastData(demand.value, 'demand');
+      if (!data) {
         plot.clear();
         throw new Error('No home demand forecast has been published.');
       }
-      const metadata = rows[0];
-      const cutoff = forecastChartTimestamp(metadata.latest_reading);
-      const bounds = publishedChartWindow(metadata);
-      const interval = metadata.interval_minutes ?? 60;
-      const intervalSeconds = interval * 60;
-      const inputsThrough = forecastChartTimestamp(metadata.inputs_through);
-      const forecast = forecastChartSeries(rows, 'ai_forecast_kwh');
-      const issue = inputsThrough ?? (forecast.length && cutoff !== null
-        ? Math.floor(cutoff / intervalSeconds) * intervalSeconds : null);
-      const data = {
-        ...(bounds ?? {
-          start: cutoff === null ? null : cutoff - 48 * 3600,
-          end: cutoff === null ? null : cutoff + 48 * 3600,
-        }),
-        kind: 'demand', timezone: metadata.timezone || 'Europe/London',
-        latest_reading: cutoff, interval_minutes: interval,
-        forecast_issued_at: issue,
-        inputs_through: inputsThrough,
-        last_run_at: forecastChartTimestamp(metadata.last_run_at),
-        model_name: metadata.model_name,
-        model_label: metadata.model_label,
-        measured: forecastChartSeries(rows, 'measured_kwh'),
-        past: forecastChartSeries(rows, 'ai_past_estimate_kwh'),
-        forecast,
-      };
-      if (bounds && Object.hasOwn(metadata, 'measured_today_kwh')) {
-        data.measured_today_kwh = forecastChartNumber(metadata.measured_today_kwh);
-      }
       const result = plot.draw(data);
       status.textContent = result.warning;
+      errorData = diagnostics.status === 'fulfilled' ? {
+        timezone: 'Europe/London', demand_range_blocks: publishedDemandRangeBlocks(diagnostics.value, data),
+      } : null;
+      errorStatus.textContent = diagnostics.status === 'rejected'
+        ? diagnostics.reason.message || 'Could not load the home demand forecast errors.' : '';
+      errorStatus.hidden = !errorStatus.textContent;
+      drawErrors();
     } catch (error) {
       if (id !== request) return;
       status.textContent = error.message;
+      errorData = null;
+      drawErrors();
       if (!chart.childElementCount) chart.setAttribute('hidden', '');
     } finally {
       loading = false;
@@ -202,63 +268,13 @@ function liveForecastChart(panel, chart, fallbackCursor = () => null) {
     refreshTimer = setTimeout(loadDemand, 250);
   }
   window.addEventListener('energy-cloud-connected', () => {
-    unsubscribe?.();
+    for (const unsubscribe of subscriptions) unsubscribe();
     request++;
     plot.reset();
-    unsubscribe = window.energyCloud.watchForecast('home_demand_estimate', scheduleDemand);
+    errorData = null;
+    drawErrors();
+    subscriptions = ['home_demand_estimate', 'demand_error']
+      .map(table => window.energyCloud.watchForecast(table, scheduleDemand));
     scheduleDemand();
-  });
-})();
-
-(() => {
-  const panel = document.getElementById('solar-forecasts');
-  const chart = document.getElementById('demand-error-chart');
-  const status = document.getElementById('demand-error-status');
-  let generation = 0;
-  let refreshTimer;
-  let unsubscribe;
-
-  function showStatus(message) {
-    status.textContent = message;
-    status.hidden = !message;
-  }
-
-  async function loadErrors() {
-    if (panel.hidden || document.hidden) return;
-    const request = ++generation;
-    try {
-      const rows = await window.energyCloud.readDemandErrors();
-      if (request !== generation) return;
-      const blocks = rows.map(row => ({
-        day: row.day,
-        period: row.period,
-        start: forecastChartTimestamp(row.time),
-        end: forecastChartTimestamp(row.block_end),
-        range_kwh: [forecastChartNumber(row.range_low_kwh), forecastChartNumber(row.range_high_kwh)],
-        measured_kwh: forecastChartNumber(row.measured_kwh),
-        error_kwh: forecastChartNumber(row.error_kwh),
-      }));
-      chart.toggleAttribute('hidden', !SolarGeneration.drawErrors(chart, { error_blocks: blocks }));
-      showStatus('');
-    } catch (error) {
-      if (request !== generation) return;
-      chart.setAttribute('hidden', '');
-      showStatus(error.message || 'Could not load the home demand forecast errors.');
-    }
-  }
-
-  function scheduleErrors() {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(loadErrors, 250);
-  }
-
-  window.addEventListener('energy-cloud-forecast-refresh', loadErrors);
-  window.addEventListener('energy-cloud-connected', () => {
-    unsubscribe?.();
-    generation++;
-    chart.setAttribute('hidden', '');
-    showStatus('');
-    scheduleErrors();
-    unsubscribe = window.energyCloud.watchForecast('demand_error', scheduleErrors);
   });
 })();

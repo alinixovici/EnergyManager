@@ -7,14 +7,14 @@
 
   const get = name => document.getElementById('solar-command-' + name);
   const button = get('refresh');
+  const summary = get('summary');
   const status = get('status');
+  const dailyCharge = get('daily-charge');
   const figure = get('figure');
   const chart = get('chart');
   const legend = get('legend');
   const asOf = get('as-of');
   const windows = get('windows');
-  const strategy = get('strategy');
-  const schedule = get('schedule');
   const defaults = get('defaults');
   const sources = get('sources');
   const buttonStatusMessage = get('button-status-message');
@@ -45,7 +45,8 @@
     estimatedSolar: { label: 'Solar estimated', color: '#b02a72', dash: '6 4' },
     forecastSolar: { label: 'Solar forecast', color: '#996500' },
     recordedGrid: { label: 'Recorded grid charge', color: '#8999ae', bar: true },
-    proposedGrid: { label: 'Proposed grid charge', color: '#29364f', bar: true },
+    automaticGrid: { label: 'Automatic grid charge', color: '#29364f', bar: true },
+    manualGrid: { label: 'Manual grid charge', color: '#bd5814', bar: true },
   };
 
   function html(tag, content) {
@@ -71,24 +72,50 @@
       day: format(day),
       date: format({ year: 'numeric', month: '2-digit', day: '2-digit' }),
       clock: format(time),
+      zonedClock: format({ ...time, timeZoneName: 'short' }),
       localMinute: format({ ...day, ...time, timeZoneName: 'short' }),
       full: format({ ...day, ...time, second: '2-digit', timeZoneName: 'short' }),
     };
   }
 
+  function chartValueAt(segments, time, interval) {
+    let lo = 0, hi = segments.length;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (segments[mid][0] <= time) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === 0) return null;
+    const [start, end, value, endValue] = segments[lo - 1];
+    if (time > end || (interval && time === end)) return null;
+    if (interval) return { value, minutes: (end - start) / 60 };
+    return { value: start === end ? value : value + (endValue - value) * (time - start) / (end - start) };
+  }
+
   function draw(data, formatters) {
     const history = Array.isArray(data.history) ? data.history : [];
     const forecast = Array.isArray(data.forecast) ? data.forecast : [];
+    const gridPlan = Array.isArray(data.schedule)
+      ? data.schedule.map(slot => ({ time: slot.start, end: slot.end, grid_kwh: slot.kwh, source: slot.source })) : forecast;
+    const { demand, solar } = data.energy_plots ?? {};
+    const recordedGrid = Array.isArray(data.history_grid) ? data.history_grid : history;
     const minuteHistory = Array.isArray(data.history_soc) && data.history_soc.length;
     const socHistory = minuteHistory ? data.history_soc : history;
     chart.replaceChildren();
     legend.replaceChildren();
-    if (!formatters || (!socHistory.length && !history.length && !forecast.length)) return false;
+    const hover = window.SolarLoggerChartHover;
+    if (!formatters) {
+      hover?.clear(chart);
+      return false;
+    }
 
-    const timestamps = [...history, ...forecast, ...socHistory]
+    const timestamps = [...history, ...forecast, ...socHistory, ...gridPlan]
       .flatMap(row => [row.time, row.end]).filter(Number.isFinite);
-    if (!timestamps.length) return false;
     const hasWindow = Number.isFinite(data.start) && Number.isFinite(data.end) && data.end > data.start;
+    if (!hasWindow && !timestamps.length) {
+      hover?.clear(chart);
+      return false;
+    }
     const bounds = hasWindow ? [data.start, data.end] : timestamps.reduce(
       ([low, high], value) => [Math.min(low, value), Math.max(high, value)],
       [Number.isFinite(data.cutoff) ? data.cutoff : Infinity, Number.isFinite(data.cutoff) ? data.cutoff : -Infinity]);
@@ -104,19 +131,25 @@
     const start = hasWindow ? data.start : midnights.filter(stamp => stamp <= bounds[0]).pop() ?? bounds[0];
     const end = hasWindow ? data.end : midnights.find(stamp => stamp >= bounds[1] && stamp > start) ?? Math.max(bounds[1], start + 3600);
     const days = midnights.filter(stamp => stamp >= start && stamp < end);
-    const asOf = Number.isFinite(data.as_of) ? data.as_of : Date.now() / 1000;
+    const asOf = data.display_as_of ?? data.as_of ?? Date.now() / 1000;
     const today = formatters.date.format(asOf * 1000);
     const dateLabelStep = Math.max(1, Math.ceil(days.length / 15));
     const labelledDays = new Set(days.filter((_, index) => index % dateLabelStep === 0));
-    const left = 76, right = 1156, top = 43;
+    const hasCursor = Number.isFinite(data.cutoff) && data.cutoff >= start && data.cutoff <= end;
+    const cursor = window.SolarLoggerCursor;
+    const cursorSpace = hasCursor && cursor ? cursor.height + 4 : 0;
+    const left = 76, right = 1156, socHeader = 43, top = socHeader + cursorSpace;
     const socBottom = top + 204;
-    const energyTop = socBottom + 76, energyPlotTop = energyTop + 75, energyBottom = energyPlotTop + 213;
+    const energyTop = socBottom + 76, energyHeader = energyTop + 75;
+    const energyPlotTop = energyHeader + cursorSpace, energyBottom = energyPlotTop + 213;
     const plotBottoms = [socBottom, energyBottom];
     const x = stamp => left + (stamp - start) / (end - start) * (right - left);
-    const socY = value => socBottom - value / 100 * (socBottom - top);
+    const socY = value => socBottom - value / 110 * (socBottom - top);
 
-    const positive = [...history, ...forecast].flatMap(row => [row.solar_kwh, row.estimated_solar_kwh, row.grid_kwh]);
-    const negative = [...history, ...forecast].flatMap(row => [row.demand_kwh, row.estimated_demand_kwh]);
+    const plotValues = source => source ? [...source.measured, ...source.past, ...source.forecast].map(([, value]) => value) : [];
+    const positive = plotValues(solar);
+    positive.push(...[...recordedGrid, ...gridPlan].map(row => row.grid_kwh));
+    const negative = plotValues(demand);
     const peak = positive.reduce((value, next) => Number.isFinite(next) ? Math.max(value, next) : value, 0.1);
     const trough = negative.reduce((value, next) => Number.isFinite(next) ? Math.max(value, next) : value, 0.1);
     const rawStep = (peak + trough) / 7;
@@ -126,6 +159,7 @@
     const energyY = value => energyBottom - (value + lowerTicks * step) / ((upperTicks + lowerTicks) * step) *
       (energyBottom - energyPlotTop);
     const visibleLines = [];
+    const socSeries = [], energySeries = [];
     const limits = [[data.reserve, lines.reserve], [data.target, lines.gridTarget]]
       .filter(([value]) => Number.isFinite(value));
     const limitLabel = ([value, appearance]) => appearance.label + ' ' + value + '%';
@@ -133,7 +167,7 @@
     chart.setAttribute('viewBox', '0 0 1176 ' + (energyBottom + 54));
     svg('title', { id: 'solar-command-chart-title' }, 'Battery SOC and energy forecast');
     svg('desc', { id: 'solar-command-chart-desc' },
-      ['Measured and estimated history appears before the forecast cutoff. Solar and grid charge are positive and household demand is negative.',
+      ['The dotted vertical line marks the latest battery SOC reading. Solar and grid charge are positive and household demand is negative.',
         ...limits.map(limitLabel)].join(' '));
 
     const line = (x1, y1, x2, y2, stroke = '#d5ddd8', weight = 1, dash) => {
@@ -175,6 +209,7 @@
       line(left, socY(value), right, socY(value));
       label(left - 8, socY(value) + 4, value + '%', 'end');
     }
+    line(left, top, right, top);
     for (let index = -lowerTicks; index <= upperTicks; index++) {
       const value = index * step;
       line(left, energyY(value), right, energyY(value), index === 0 ? '#77857d' : '#d5ddd8', index === 0 ? 1.5 : 1);
@@ -198,21 +233,14 @@
       }
       if (span < 135) continue;
 
-      const inDay = rows => rows.filter(row => row.time >= day && row.time < next);
-      const actual = inDay(history), projected = inDay(forecast);
       const isToday = formatters.date.format(day * 1000) === today;
       const isFuture = day > asOf;
+      const period = isFuture ? 'future' : isToday ? 'today' : 'past';
       const rowNames = isFuture ? ['Forecast'] : ['Estimated', isToday ? 'Measured so far' : 'Measured'];
       const rowColors = isFuture ? ['#26384d'] : ['#a3431b', '#16736e'];
-
-      const sum = values => values.reduce((total, value) => Number.isFinite(value) ? (total ?? 0) + value : total, null);
-      const energyKeys = ['demand_kwh', 'solar_kwh'];
-      const forecastTotals = energyKeys.map(key => sum(projected.map(row => row[key])));
-      const measuredTotals = energyKeys.map(key => sum(actual.map(row => row[key])));
-      const estimatedTotals = energyKeys.map((key, i) => sum([
-        ...actual.map(row => row['estimated_' + key]), isToday ? forecastTotals[i] : null,
-      ]));
-      const energyValues = isFuture ? [forecastTotals] : [estimatedTotals, measuredTotals];
+      const totals = [demand, solar].map(source => SolarGeneration.dailyTotals(source, day, next, period));
+      const keys = isFuture ? ['forecast'] : ['estimated', 'measured'];
+      const energyValues = keys.map(key => totals.map(total => total[key]));
       if (isToday || energyValues.some(values => values.some(Number.isFinite))) {
         dailyEnergyCard(center, span, energyValues.map((cells, i) => ({
           name: rowNames[i], color: rowColors[i],
@@ -240,75 +268,101 @@
       visibleLines.push(appearance);
     }
 
-    function socPath(rows, key, appearance, maximumGap) {
+    function socPath(rows, key, appearance, maximumGap, resets) {
       let path = '', previous = null;
+      const segments = [];
       for (const { time, [key]: value } of rows) {
         if (!Number.isFinite(time) || !Number.isFinite(value)) continue;
-        path += (previous !== null && time - previous <= maximumGap ? 'L' : 'M') + x(time) + ' ' + socY(value);
-        previous = time;
+        const continuous = previous !== null && time - previous[0] <= maximumGap;
+        const reset = resets?.get(time);
+        const hasPrior = reset && Number.isFinite(reset.prior_soc);
+        if (hasPrior && continuous) {
+          path += 'L' + x(time) + ' ' + socY(reset.prior_soc);
+        }
+        if (continuous && (!reset || hasPrior)) {
+          segments.push([previous[0], time, previous[1], hasPrior ? reset.prior_soc : value]);
+        }
+        path += (continuous && !reset ? 'L' : 'M') + x(time) + ' ' + socY(value);
+        previous = [time, value];
+        segments.push([time, time, value, value]);
       }
       drawPath(path, appearance);
+      if (segments.length) socSeries.push({ appearance, segments });
     }
 
     function forecastSocPath(key, endKey, appearance) {
       let path = '', previous = null;
+      const segments = [];
       for (const row of forecast) {
         if (![row.time, row.end, row[key], row[endKey]].every(Number.isFinite)) continue;
         if (row.time !== previous) path += 'M' + x(row.time) + ' ' + socY(row[key]);
         path += 'L' + x(row.end) + ' ' + socY(row[endKey]);
         previous = row.end;
+        segments.push([row.time, row.end, row[key], row[endKey]]);
       }
       drawPath(path, appearance);
+      if (segments.length) socSeries.push({ appearance, segments });
     }
 
-    function intervalPath(rows, key, appearance, sign) {
+    function intervalPath(source, key, appearance) {
+      if (!source) return;
+      const isDemand = source.kind === 'demand';
+      const seconds = source.interval_minutes * 60;
       let path = '', previous = null;
-      for (const row of rows) {
-        if (![row.time, row.end, row[key]].every(Number.isFinite) || row.end <= row.time) continue;
-        path += (row.time === previous ? 'L' : 'M') + x(row.time) + ' ' + energyY(sign * row[key]) + 'H' + x(row.end);
-        previous = row.end;
+      const segments = [];
+      for (const [stamp, value] of source[key]) {
+        const from = Math.max(start, isDemand ? stamp : stamp - seconds);
+        const until = Math.min(end, isDemand ? stamp + seconds : stamp);
+        if (until <= from) continue;
+        const plotted = isDemand ? -value : value;
+        path += (from === previous ? 'L' : 'M') + x(from) + ' ' + energyY(plotted) + 'H' + x(until);
+        segments.push([from, until, plotted]);
+        previous = until;
       }
       drawPath(path, appearance);
+      if (segments.length) energySeries.push({ appearance, segments, minutes: source.interval_minutes });
     }
 
-    function gridBars(rows, appearance, showInLegend) {
+    function gridBars(rows, appearance) {
       const bars = rows.filter(row => Number.isFinite(row.grid_kwh) && row.grid_kwh > 0 && row.end > row.time);
       for (const row of bars) {
         const y = energyY(row.grid_kwh);
         svg('rect', { x: x(row.time) + 1, y, width: Math.max(1, x(row.end) - x(row.time) - 2),
           height: energyY(0) - y, fill: appearance.color, opacity: 0.8 });
       }
-      if (bars.length || showInLegend) visibleLines.push(appearance);
+      if (bars.length) visibleLines.push(appearance);
+      if (bars.length) energySeries.push({ appearance, segments: bars.map(row => [row.time, row.end, row.grid_kwh]) });
     }
 
     for (const [value, appearance] of limits) {
+
       line(left, socY(value), right, socY(value), appearance.color, 1.6, appearance.dash);
     }
     const historyGap = minuteHistory ? 300 : 3601;
+    const replayResets = new Map((data.soc_replay_resets ?? []).map(reset => [reset.time, reset]));
     socPath(socHistory, 'soc', lines.measuredSoc, historyGap);
-    socPath(socHistory, 'estimated_soc', lines.estimatedSoc, historyGap);
+    socPath(socHistory, 'estimated_soc', lines.estimatedSoc, historyGap, replayResets);
     forecastSocPath('soc', 'end_soc', lines.forecastSoc);
     forecastSocPath('no_charge_soc', 'end_no_charge_soc', lines.unchargedSoc);
 
-    gridBars(history, lines.recordedGrid, false);
-    gridBars(forecast, lines.proposedGrid, forecast.length > 0);
-    intervalPath(history, 'demand_kwh', lines.measuredDemand, -1);
-    intervalPath(history, 'estimated_demand_kwh', lines.estimatedDemand, -1);
-    intervalPath(forecast, 'demand_kwh', lines.forecastDemand, -1);
-    intervalPath(history, 'solar_kwh', lines.measuredSolar, 1);
-    intervalPath(history, 'estimated_solar_kwh', lines.estimatedSolar, 1);
-    intervalPath(forecast, 'solar_kwh', lines.forecastSolar, 1);
+    gridBars(recordedGrid, lines.recordedGrid);
+    gridBars(gridPlan.filter(row => row.source !== 'manual'), lines.automaticGrid);
+    gridBars(gridPlan.filter(row => row.source === 'manual'), lines.manualGrid);
+    intervalPath(demand, 'measured', lines.measuredDemand);
+    intervalPath(demand, 'past', lines.estimatedDemand);
+    intervalPath(demand, 'forecast', lines.forecastDemand);
+    intervalPath(solar, 'measured', lines.measuredSolar);
+    intervalPath(solar, 'past', lines.estimatedSolar);
+    intervalPath(solar, 'forecast', lines.forecastSolar);
 
-    if (Number.isFinite(data.cutoff)) {
+    if (hasCursor) {
       const divider = x(data.cutoff);
       for (const [y, bottom] of [[top, socBottom], [energyPlotTop, energyBottom]]) {
         line(divider, y, divider, bottom, '#34465a', 2, '3 4');
       }
-      const boxWidth = 48;
-      const boxX = divider + 7 + boxWidth <= right ? divider + 7 : divider - 7 - boxWidth;
-      svg('rect', { x: boxX, y: top + 3, width: boxWidth, height: 21, rx: 3, fill: '#fff' });
-      const cutoffTime = formatters.clock.format(data.cutoff * 1000);
-      label(boxX + boxWidth / 2, top + 17, cutoffTime, 'middle', 12, 650, '#34465a');
+      for (const labelTop of [socHeader, energyHeader]) {
+        cursor?.draw(chart, { time: data.cutoff, timeZone: data.timezone, x: divider, top: labelTop, left, right });
+      }
     }
 
     for (const { label: title, color, dash, bar } of visibleLines) {
@@ -321,34 +375,51 @@
       item.append(swatch, title);
       legend.append(item);
     }
-    return true;
+    hover?.attach(chart, (px, py) => {
+      if (px < left || px > right) return null;
+      const isSoc = py >= top && py <= socBottom;
+      if (!isSoc && (py < energyPlotTop || py > energyBottom)) return null;
+      const time = Math.round(start + (px - left) * (end - start) / (right - left));
+      const rows = [];
+      for (const { appearance, segments, minutes } of isSoc ? socSeries : energySeries) {
+        const point = chartValueAt(segments, time, !isSoc);
+        if (!Number.isFinite(point?.value)) continue;
+        const value = isSoc
+          ? point.value.toFixed(1) + '%'
+          : `${point.value.toFixed(2)} kWh · ${Number((minutes ?? point.minutes).toFixed(2))} min`;
+        rows.push({ label: appearance.label, color: appearance.color, value });
+      }
+      if (!rows.length) return null;
+      if (isSoc) {
+        for (const [value, appearance] of limits) {
+          rows.push({ label: appearance.label, color: appearance.color, value: value.toFixed(1) + '%' });
+        }
+      }
+      return {
+        title: (isSoc ? formatters.full : formatters.localMinute).format(time * 1000), rows,
+        guide: { x: x(time), top: isSoc ? top : energyPlotTop, bottom: isSoc ? socBottom : energyBottom },
+      };
+    });
+    return days;
   }
 
-  function drawSchedule(slots, formatters) {
-    schedule.replaceChildren();
-    schedule.hidden = !formatters || !Array.isArray(slots) || !slots.length;
-    if (schedule.hidden) return;
-    const table = html('table');
-    table.className = 'solar-command-table';
-    const header = html('tr');
-    for (const name of ['Start', 'End', 'Energy', 'Power', 'Target SOC']) {
-      const heading = html('th', name);
-      heading.scope = 'col';
-      header.append(heading);
-    }
-    table.append(html('thead'));
-    table.tHead.append(header);
-    const body = html('tbody');
-    for (const slot of slots) {
-      const row = html('tr');
-      const stamp = time => Number.isFinite(time) ? formatters.full.format(time * 1000) : '—';
-      const value = (number, unit) => Number.isFinite(number) ? number.toFixed(2) + unit : '—';
-      row.append(...[stamp(slot.start), stamp(slot.end), value(slot.kwh, ' kWh'), value(slot.kw, ' kW'),
-        value(slot.target_soc, '%')].map(text => html('td', text)));
-      body.append(row);
-    }
-    table.append(body);
-    schedule.append(table);
+  function renderDailyCharging(data, formatters, days) {
+    const slots = (data.schedule ?? []).filter(slot =>
+      [slot.start, slot.end, slot.kwh].every(Number.isFinite) && slot.end > slot.start && slot.kwh > 0);
+    const entries = data.ok || slots.length ? days.flatMap((start, i) => {
+      const end = days[i + 1] ?? data.end;
+      if (end <= data.as_of) return [];
+      const energy = slots.reduce((total, slot) => {
+        const overlap = Math.max(0, Math.min(end, slot.end) - Math.max(start, slot.start));
+        return total + slot.kwh * overlap / (slot.end - slot.start);
+      }, 0);
+      const entry = html('div');
+      if (energy > 0) entry.className = 'solar-command-charge-day';
+      entry.append(html('dt', formatters.day.format(start * 1000)), html('dd', energy.toFixed(2) + ' kWh'));
+      return [entry];
+    }) : [];
+    dailyCharge.replaceChildren(...entries);
+    dailyCharge.hidden = !entries.length;
   }
 
   function render(data) {
@@ -356,7 +427,9 @@
     const windowLabel = values => Array.isArray(values) ? values.join(', ') || 'None' : null;
     const operatingRange = Number.isFinite(data.minimum_operating_soc) && Number.isFinite(data.maximum_operating_soc)
       ? data.minimum_operating_soc + '%–' + data.maximum_operating_soc + '%' : null;
-    figure.hidden = !draw(data, formatters);
+    const days = draw(data, formatters);
+    figure.hidden = !days;
+    renderDailyCharging(data, formatters, days || []);
     const limits = [
       Number.isFinite(data.reserve) ? 'Reserve ' + data.reserve + '%' : null,
       Number.isFinite(data.target) ? 'Grid charge cap ' + data.target + '%' : null,
@@ -366,34 +439,27 @@
     const minimumTime = formatters && Number.isFinite(data.minimum_soc_time)
       ? ' · ' + formatters.localMinute.format(data.minimum_soc_time * 1000) : '';
     const entries = [
-      ['Allowed grid charging (local time)', windowLabel(data.allowed)],
-      ['Blocked grid charging (local time)', windowLabel(data.blocked)],
-      ['Battery operating range', operatingRange],
+      ['Auto charging (local time)', windowLabel(data.allowed)],
+      ['Auto blocked (local time)', windowLabel(data.blocked)],
+      ['Battery range', operatingRange],
       ['Battery SOC limits', figure.hidden && limits ? limits : null],
       ['Forecast minimum SOC', Number.isFinite(data.minimum_soc) ? data.minimum_soc.toFixed(1) + '%' + minimumTime : null],
     ].filter(([, value]) => value !== null);
     windows.replaceChildren(...entries.map(([name, value]) => {
-      const card = html('div');
+      const card = html('dl');
       card.append(html('dt', name), html('dd', value));
       return card;
     }));
     windows.hidden = !entries.length;
 
-    const planned = Number.isFinite(data.total_grid_kwh) ? data.total_grid_kwh.toFixed(2) + ' kWh' : '';
     const headlines = {
-      planned: 'Grid charging proposed' + (planned ? ' · ' + planned : ''),
+      planned: 'Grid charging proposed',
       'no-charge': 'No grid charging proposed.',
       infeasible: 'The forecast cannot maintain the reserve within the allowed charging windows.',
       unavailable: 'Charge plan unavailable.',
     };
-    status.dataset.state = Object.hasOwn(headlines, data.status) ? data.status : 'unavailable';
-    status.textContent = headlines[status.dataset.state];
-
-    const explanations = [data.strategy, data.message, ...(Array.isArray(data.warnings) ? data.warnings : [])]
-      .filter(text => typeof text === 'string' && text && text !== status.textContent);
-    get('decision').textContent = [...new Set(explanations)].join(' ');
-    drawSchedule(data.schedule, formatters);
-    strategy.hidden = !explanations.length && schedule.hidden;
+    summary.dataset.state = Object.hasOwn(headlines, data.status) ? data.status : 'unavailable';
+    status.textContent = [headlines[summary.dataset.state], !data.ok ? data.message : null].filter(Boolean).join(' ');
 
     const used = Array.isArray(data.defaults) ? data.defaults : null;
     const defaultList = get('default-list');
@@ -404,11 +470,11 @@
       list.append(...used.map(item => html('li', item)));
       defaultList.append(list);
     } else if (used && data.defaults_complete !== false) {
-      defaultList.append(html('p', status.dataset.state === 'unavailable'
+      defaultList.append(html('p', summary.dataset.state === 'unavailable'
         ? 'No defaults were reported for this request.' : 'No defaults were used.'));
     }
     if (used && data.defaults_complete === false) {
-      defaultList.append(html('p', status.dataset.state === 'unavailable'
+      defaultList.append(html('p', summary.dataset.state === 'unavailable'
         ? 'The charge plan could not complete the defaults audit.'
         : 'Some NAS forecast data did not report whether its source used defaults.'));
     }
@@ -450,7 +516,7 @@
       const minutes = (120 + index * 30) % 1440;
       const clock = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
       const charge = selected.has(index);
-      const state = charge ? 'Charge' : 'Normal';
+      const state = charge ? 'Selected for charging' : 'Unselected';
       const slot = html('li', clock);
       slot.dataset.state = charge ? 'charge' : 'normal';
       slot.title = clock + ' · ' + state;
@@ -477,20 +543,27 @@
     panel.setAttribute('aria-busy', 'true');
     const buttonStatus = refreshButtonStatus(connection);
     try {
-      const data = await cloud.readControl();
+      const [plan, demand, solar] = await Promise.allSettled([
+        cloud.readControl(), cloud.readDemandForecast(), cloud.readForecast(),
+      ]);
       if (connection !== generation) return;
+      if (plan.status === 'rejected') throw plan.reason;
+      const data = plan.value;
       render(data ? {
-        strategy: 'Use the allowed grid windows to keep SOC above the battery reserve until forecast net solar can recharge the battery or grid charging is available again. Carry extra energy through a solar period only if its forecast surplus is insufficient to reach the following opportunity. The grid charge cap still applies.',
         ...data,
+        energy_plots: {
+          demand: demand.status === 'fulfilled' ? publishedForecastData(demand.value, 'demand') : null,
+          solar: solar.status === 'fulfilled' ? publishedForecastData(solar.value, 'solar') : null,
+        },
       } : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
-      status.hidden = false;
+      summary.hidden = false;
     } catch (error) {
       if (connection === generation) {
         const message = error.code === '42501'
           ? 'Run control-read.sql in Supabase to enable Control reads.'
           : error.message || 'Could not read the Control plan from Supabase.';
         render({ status: 'unavailable', message });
-        status.hidden = false;
+        summary.hidden = false;
       }
     } finally {
       await buttonStatus;
@@ -509,7 +582,7 @@
     stopWatching?.();
     render({});
     showButtonStatus(null);
-    status.hidden = true;
+    summary.hidden = true;
     stopWatching = cloud.watchControl(() => {
       clearTimeout(updateTimer);
       updateTimer = setTimeout(refresh, 250);

@@ -12,8 +12,7 @@ const SolarGeneration = (() => {
     return node;
   }
 
-  function chartElements(svg, height) {
-    const { width } = frame;
+  function chartElements(svg, height, width = frame.width) {
     svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
     svg.setAttribute('font-family', 'DejaVu Sans, Verdana, sans-serif');
     const element = (tag, attributes, text) => svgElement(svg, tag, attributes, text);
@@ -27,17 +26,57 @@ const SolarGeneration = (() => {
     return { element, line, label };
   }
 
+  function dailyTotals(data, start, end, period) {
+    if (!data) return {};
+    const demand = data.kind === 'demand';
+    const { measured, past, forecast } = data;
+    const sum = (points, match = null) => {
+      let total = null;
+      for (const [time, value] of points) {
+        const inDay = demand ? time >= start && time < end : time > start && time <= end;
+        if (inDay && (!match || match.has(time))) total = (total ?? 0) + value;
+      }
+      return total;
+    };
+    if (period === 'future') return { forecast: sum(forecast) };
+    if (period === 'today') {
+      return {
+        estimated: sum([...past, ...forecast]),
+        measured: demand && Object.prototype.hasOwnProperty.call(data, 'measured_today_kwh')
+          ? data.measured_today_kwh : sum(measured),
+      };
+    }
+    return {
+      estimated: sum(past, new Map(measured)),
+      measured: sum(measured, new Map(past)),
+    };
+  }
+
+  function intervalTitle(timeZone) {
+    const day = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short' });
+    const clock = new Intl.DateTimeFormat('en-GB', {
+      timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+    });
+    return (start, end) => {
+      const firstDay = day.format(start * 1000);
+      const lastDay = day.format(end * 1000);
+      const endDay = firstDay === lastDay ? '' : lastDay + ', ';
+      return firstDay + ', ' + clock.format(start * 1000) + ' – ' + endDay + clock.format(end * 1000);
+    };
+  }
+
   function draw(svg, data, cursorTime) {
     const demand = data.kind === 'demand';
     let warning = [...new Set([data.run_warning, data.model_warning].filter(Boolean))].join(' ');
-    const { start: dataStart, end: dataEnd } = data;
+    const { start, end } = data;
     svg.replaceChildren();
-    if (!Number.isFinite(dataStart) || !Number.isFinite(dataEnd) || dataEnd <= dataStart) {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      window.SolarLoggerChartHover.clear(svg);
       return { hasData: false, warning: 'The NAS did not provide a valid forecast chart window.' };
     }
     const withinWindow = points => points.filter(point => Array.isArray(point)
       && Number.isFinite(point[0]) && Number.isFinite(point[1])
-      && (demand ? point[0] >= dataStart && point[0] < dataEnd : point[0] > dataStart && point[0] <= dataEnd));
+      && (demand ? point[0] >= start && point[0] < end : point[0] > start && point[0] <= end));
     const measured = withinWindow(data.measured);
     const past = withinWindow(data.past);
     const forecast = withinWindow(data.forecast);
@@ -48,32 +87,25 @@ const SolarGeneration = (() => {
     ].filter(line => line.values.length);
 
     if (!series.length) {
-      warning = [warning, 'No measured inverter data is available.'].filter(Boolean).join(' ');
-      return { hasData: false, warning };
+      warning = [warning, 'No saved forecast or measured values are available in this date range.'].filter(Boolean).join(' ');
     }
     const cutoff = demand && Number.isFinite(data.latest_reading) ? data.latest_reading : data.download;
-    const download = Number.isFinite(cutoff) && cutoff >= dataStart && cutoff < dataEnd ? cutoff : null;
-    const centered = Number.isFinite(cursorTime) && cursorTime >= dataStart && cursorTime < dataEnd;
-    const cursor = centered ? cursorTime : download;
-    // Pan the display window independently of the dates used for the series and daily totals.
-    const span = dataEnd - dataStart;
-    const start = centered ? cursor - span / 2 : dataStart;
-    const end = start + span;
+    const inWindow = time => Number.isFinite(time) && time >= start && time < end;
+    const liveCursor = inWindow(cursorTime);
+    const cursor = liveCursor ? cursorTime : inWindow(cutoff) ? cutoff : null;
     const { width, left, right, top } = frame;
     const height = 522, bottom = 387;
     const timezone = { timeZone: data.timezone };
     const calendar = new Intl.DateTimeFormat('en-GB', { ...timezone, day: 'numeric', month: 'short' });
     const clock = new Intl.DateTimeFormat('en-GB', { ...timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     const all = series.flatMap(line => line.values);
-    const calendarStart = Math.min(start, dataStart);
-    const calendarEnd = Math.max(end, dataEnd);
-    const midnights = [calendarStart], ticks = [];
-    for (let time = Math.ceil(calendarStart / 900) * 900; time < calendarEnd; time += 900) {
+    const midnights = [start], ticks = [];
+    for (let time = Math.ceil(start / 900) * 900; time < end; time += 900) {
       const tick = clock.format(time * 1000);
-      if (tick === '00:00' && time > calendarStart) midnights.push(time);
-      if (time >= start && time < end && ['00:00', '06:00', '12:00', '18:00'].includes(tick)) ticks.push([time, tick]);
+      if (tick === '00:00' && time > start) midnights.push(time);
+      if (['00:00', '06:00', '12:00', '18:00'].includes(tick)) ticks.push([time, tick]);
     }
-    midnights.push(calendarEnd);
+    midnights.push(end);
     const ceiling = Math.max(0.05, ...all.map(point => point[1])) * 1.29;
     const spacing = ceiling / 9;
     const magnitude = 10 ** Math.floor(Math.log10(spacing));
@@ -114,11 +146,10 @@ const SolarGeneration = (() => {
     const today = dayKey.format(Number.isFinite(data.as_of) ? data.as_of * 1000 : Date.now());
     const days = midnights.slice(0, -1).map((time, i) => ({
       time, until: midnights[i + 1], key: dayKey.format(time * 1000),
-      visibleStart: Math.max(time, start), visibleEnd: Math.min(midnights[i + 1], end),
-    })).filter(day => day.visibleStart < day.visibleEnd);
-    for (const { visibleStart, visibleEnd, key } of days) {
+    }));
+    for (const { time, until, key } of days) {
       if (key !== today) element('rect', {
-        x: x(visibleStart), y: top, width: x(visibleEnd) - x(visibleStart), height: bottom - top, fill: plotColors.day,
+        x: x(time), y: top, width: x(until) - x(time), height: bottom - top, fill: plotColors.day,
       });
     }
     for (let power = 0; power <= ceiling + 1e-9; power += step) {
@@ -126,14 +157,14 @@ const SolarGeneration = (() => {
       label(left - 10, y(power) + 4, power.toFixed(decimals), 'end');
     }
     for (const [time, tick] of ticks) label(x(time), bottom + 19, tick, 'middle', 13);
-    for (const { time, visibleStart, visibleEnd } of days) {
+    for (const { time, until } of days) {
       if (time > start) line(x(time), top, x(time), bottom, plotColors.boundary);
       const [day, month] = calendar.format(time * 1000).split(' ');
       const number = Number(day);
       const suffix = number % 100 >= 11 && number % 100 <= 13
         ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[number % 10] || 'th');
-      const dayLabelWidth = x(visibleEnd) - x(visibleStart);
-      if (dayLabelWidth >= 65) label(x((visibleStart + visibleEnd) / 2), bottom + 52,
+      const dayLabelWidth = x(until) - x(time);
+      if (dayLabelWidth >= 65) label(x((time + until) / 2), bottom + 52,
         day + suffix + ' ' + month, 'middle', 14, 700);
     }
     line(left, top, left, bottom, plotColors.axis);
@@ -142,24 +173,48 @@ const SolarGeneration = (() => {
     const clip = svgElement(element('defs', {}), 'clipPath', { id: clipId });
     svgElement(clip, 'rect', { x: left, y: top, width: right - left, height: bottom - top });
     const plot = element('g', { 'clip-path': 'url(#' + clipId + ')' });
-    for (const { values, color, fill } of series) {
-      const firstTime = demand && color === '#000000' ? download ?? dataStart : dataStart;
+    const runs = series.map(item => {
+      const segments = [];
       let segment = [];
-      for (const point of values) {
+      for (const point of item.values) {
         if (segment.length && point[0] - segment[segment.length - 1][0] > intervalSeconds) {
-          drawSegment(segment, color, fill, firstTime);
+          segments.push(segment);
           segment = [];
         }
         segment.push(point);
       }
-      drawSegment(segment, color, fill, firstTime);
+      segments.push(segment);
+      return { ...item, segments };
+    });
+    const historyRun = runs.find(run => run.values === past);
+    const forecastRun = runs.find(run => run.values === forecast);
+    const lastPast = historyRun?.segments.at(-1);
+    const firstForecast = forecastRun?.segments[0];
+    const pastHour = lastPast?.at(-1)[0];
+    const forecastHour = firstForecast?.[0][0];
+    const joinSolar = !demand && forecastHour - pastHour === intervalSeconds;
+    for (const { segments, color, fill } of runs) {
+      for (const segment of segments) {
+        if (joinSolar && segment === lastPast) continue;
+        if (joinSolar && segment === firstForecast) {
+          // Compute the join from both sets of hourly points and change colour at the last past estimate.
+          drawSegment([...lastPast, ...firstForecast], historyRun.color, false,
+            { index: lastPast.length, color });
+        } else {
+          drawSegment(segment, color, fill);
+        }
+      }
     }
-    function drawSegment(points, color, fill, firstTime) {
-      const xy = points.map(([time, power]) => [x(Math.max(time, firstTime)), y(power)]);
+    function strokeSolarPath(path, color) {
+      svgElement(plot, 'path', { d: path, fill: 'none', stroke: color,
+        'stroke-width': color === '#000000' ? 2.8 : 2.4, 'stroke-linejoin': 'round' });
+    }
+    function drawSegment(points, color, fill, continuation) {
+      const xy = points.map(([time, power]) => [x(time), y(power)]);
       if (demand) {
         let path = 'M' + xy[0].join(',');
         for (let i = 1; i < xy.length; i++) path += ' H' + xy[i][0] + ' V' + xy[i][1];
-        path += ' H' + x(Math.min(dataEnd, points[points.length - 1][0] + intervalSeconds));
+        path += ' H' + x(Math.min(end, points[points.length - 1][0] + intervalSeconds));
         if (fill) svgElement(plot, 'path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
         svgElement(plot, 'path', { d: path, fill: 'none', stroke: color, 'stroke-width': 2.4 });
         return;
@@ -191,48 +246,40 @@ const SolarGeneration = (() => {
       let path = 'M' + xy[0].join(',');
       for (let i = 1; i < xy.length; i++) {
         const [x0, y0] = xy[i - 1], [x1, y1] = xy[i];
+        if (i === continuation?.index) {
+          if (i === 1) svgElement(plot, 'circle', { cx: x0, cy: y0, r: 2.5, fill: color });
+          else strokeSolarPath(path, color);
+          color = continuation.color;
+          path = 'M' + [x0, y0].join(',');
+        }
         const third = (x1 - x0) / 3;
         path += ' C' + [x0 + third, y0 + third * slopes[i - 1], x1 - third, y1 - third * slopes[i], x1, y1].join(',');
       }
       if (fill) svgElement(plot, 'path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
-      svgElement(plot, 'path', { d: path, fill: 'none', stroke: color, 'stroke-width': color === '#000000' ? 2.8 : 2.4, 'stroke-linejoin': 'round' });
+      strokeSolarPath(path, color);
     }
     if (cursor !== null) {
       const divider = x(cursor);
       line(divider, top, divider, bottom, '#34465a', 2.5, '2 5');
-      const [day, month] = calendar.format(cursor * 1000).split(' ');
-      const cursorClock = centered ? new Intl.DateTimeFormat('en-GB', {
-        ...timezone, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-      }) : clock;
-      const color = { fill: '#34465A' };
-      const labelX = divider - 11;
-      const labelWidth = centered ? 72 : 53;
-      element('rect', { x: labelX + 5 - labelWidth, y: top + 63, width: labelWidth, height: 34, fill: '#fff', opacity: 0.95 });
-      label(labelX, top + 78, day.padStart(2, '0') + month.toLowerCase(), 'end', 13, 700, color);
-      label(labelX, top + 93, cursorClock.format(cursor * 1000), 'end', 13, 700, color);
+      const atHandoff = joinSolar && cursor >= pastHour && cursor <= forecastHour;
+      window.SolarLoggerCursor.draw(svg, {
+        time: cursor, timeZone: data.timezone, x: divider, top: top + 63, left, right,
+        ...(atHandoff ? { before: x(pastHour), after: x(forecastHour) } : {}),
+      });
     }
-    const actualHours = new Map(measured);
-    const estimateHours = new Map(past);
-    const sum = (points, time, until, match) => {
-      const values = points.filter(([hour]) => (demand ? hour >= time && hour < until : hour > time && hour <= until) && (!match || match.has(hour)));
-      return values.length ? values.reduce((total, [, power]) => total + power, 0) : null;
-    };
-    for (const { time, until, key, visibleStart, visibleEnd } of days) {
-      if (until <= dataStart || time >= dataEnd) continue;
+    const totalData = { ...data, measured, past, forecast };
+    for (const { time, until, key } of days) {
       const isToday = key === today;
-      const estimated = isToday ? [...past, ...forecast] : past;
-      const rawToday = demand && isToday && Object.prototype.hasOwnProperty.call(data, 'measured_today_kwh');
-      const measuredTotal = rawToday
-        ? (Number.isFinite(data.measured_today_kwh) ? data.measured_today_kwh : null)
-        : sum(measured, time, until, isToday ? null : estimateHours);
+      const totals = dailyTotals(totalData, time, until,
+        key > today ? 'future' : isToday ? 'today' : 'past');
       const metrics = key > today
-        ? [['Forecast', sum(forecast, time, until), '#26384D']]
+        ? [['Forecast', totals.forecast, '#26384D']]
         : [
-          ['Estimated', sum(estimated, time, until, isToday ? null : actualHours), '#A3431B'],
-          [isToday ? 'Measured so far' : 'Measured', measuredTotal, '#16736E'],
+          ['Estimated', totals.estimated, '#A3431B'],
+          [isToday ? 'Measured so far' : 'Measured', totals.measured, '#16736E'],
         ];
-      const center = x((visibleStart + visibleEnd) / 2);
-      const cardWidth = Math.min(202, x(visibleEnd) - x(visibleStart) - 10);
+      const center = x((time + until) / 2);
+      const cardWidth = Math.min(202, x(until) - x(time) - 10);
       if (cardWidth < 104) continue;
       const scale = Math.min(1, cardWidth / 202);
       const cardX = center - cardWidth / 2;
@@ -243,7 +290,7 @@ const SolarGeneration = (() => {
         const rowY = top + 5 + (20 + i * 20) * scale;
         label(cardX + 10 * scale, rowY, name, 'start', 12 * scale, 400, { fill: color });
         label(cardX + cardWidth - 10 * scale, rowY,
-          amount === null ? '—' : amount.toFixed(2) + ' kWh',
+          Number.isFinite(amount) ? amount.toFixed(2) + ' kWh' : '—',
           'end', 15 * scale, 700, { fill: color });
       });
     }
@@ -257,99 +304,209 @@ const SolarGeneration = (() => {
       label(position + 36, height - 27, title, 'start', 13);
       position += widths[title];
     }
+    const formatInterval = intervalTitle(data.timezone);
+    const hoverSeries = series.map(item => ({ ...item, values: new Map(item.values) }));
+    const unit = demand ? ' kWh' : ' kW';
+    window.SolarLoggerChartHover.attach(svg, (pointerX, pointerY) => {
+      if (pointerX < left || pointerX > right || pointerY < top || pointerY > bottom) return null;
+      const time = start + (pointerX - left) / (right - left) * (end - start);
+      // Demand is plotted as interval steps. Solar values are plotted at the end of each hour.
+      const sample = demand
+        ? Math.floor(Math.min(time, end - 1) / intervalSeconds) * intervalSeconds
+        : Math.round(time / intervalSeconds) * intervalSeconds;
+      const rows = [];
+      for (const { values, label, color } of hoverSeries) {
+        const value = values.get(sample);
+        if (Number.isFinite(value)) rows.push({ label, value: value.toFixed(2) + unit, color });
+      }
+      if (!rows.length) return null;
+      const first = demand ? sample : sample - intervalSeconds;
+      return {
+        title: formatInterval(first, first + intervalSeconds),
+        rows,
+        guide: { x: demand ? pointerX : x(sample), top, bottom },
+      };
+    });
     return { hasData: true, warning };
   }
 
   function drawErrors(svg, data) {
     svg.replaceChildren();
-    if (!Array.isArray(data.error_blocks) || !data.error_blocks.length) return false;
+    const days = ['previous', 'current', 'next', 'next2'];
+    const rangeBlocks = Array.isArray(data.demand_range_blocks)
+      ? data.demand_range_blocks.filter(block => days.includes(block?.day)) : [];
+    if (!rangeBlocks.length) {
+      window.SolarLoggerChartHover.clear(svg);
+      return false;
+    }
 
-    const days = ['previous', 'current', 'next'];
     const periods = ['02:00–08:00', '08:00–14:00', '14:00–20:00', '20:00–02:00'];
-    const blocks = new Map(data.error_blocks.map(block => [block.day + block.period, block]));
-    const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short' });
-    const { left, right, top } = frame;
-    const height = 390, bottom = 286, columnGap = 26;
-    const columnWidth = (right - left - 2 * columnGap) / days.length;
-    const rowHeight = (bottom - top) / periods.length;
-    const minimum = -4, maximum = 2;
-    const rangeColor = plotColors.boundary, measuredColor = '#6942A0', errorColor = '#238783';
-    let hasRanges = false;
-    const format = number => number.toFixed(2) + ' kWh';
-    const { element, line, label } = chartElements(svg, height);
+    const blocks = new Map(rangeBlocks.map(block => {
+      const measured = Number.isFinite(block.measured_kwh) ? block.measured_kwh : null;
+      const estimate = Number.isFinite(block.forecast_kwh) ? block.forecast_kwh : null;
+      const reference = measured ?? (Number.isFinite(block.forecast_average_kwh) ? block.forecast_average_kwh : null);
+      const offsets = block.range_kwh;
+      const bounds = reference !== null && Array.isArray(offsets) && offsets.length === 2 &&
+        offsets.every(Number.isFinite) && offsets[0] <= offsets[1]
+        ? offsets.map(offset => Math.max(0, reference + offset)) : null;
+      return [block.day + block.period, { ...block, measured, estimate, reference, bounds }];
+    }));
+    const date = new Intl.DateTimeFormat('en-GB', { timeZone: data.timezone, day: 'numeric', month: 'short' });
+    const clock = new Intl.DateTimeFormat('en-GB', {
+      timeZone: data.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    const formatInterval = intervalTitle(data.timezone);
+    const width = Math.max(1000, svg.clientWidth || frame.width);
+    const left = 100, right = width - 12, columnGap = 12;
+    const columnWidth = (right - left - (days.length - 1) * columnGap) / days.length;
+    const rowHeight = 76, panelHeight = rowHeight * periods.length;
+    const top = 44, bottom = top + panelHeight;
+    const height = bottom + 108;
+    const rangeColor = '#a4b0aa', measuredColor = '#6942a0', forecastColor = '#255d52';
+    const colorForError = error => error < 0 ? '#216987' : error > 0 ? '#9a4a24' : forecastColor;
+    const format = (number, signed = false, decimals = 2) =>
+      (signed && number > 0 ? '+' : '') + number.toFixed(decimals).replace('-', '−') + ' kWh';
+    const extents = [...blocks.values()].flatMap(({ reference, measured, estimate, bounds }) =>
+      [reference, measured !== null ? estimate : null, ...(bounds ?? [])]).filter(Number.isFinite);
+    const minimum = Math.min(0, ...extents), maximum = Math.max(5, ...extents);
+    const step = Math.max(1, Math.ceil((maximum - minimum) / 8));
+    const low = Math.floor(minimum / step) * step, high = Math.ceil(maximum / step) * step;
+    const fraction = value => (value - low) / (high - low);
+    const ticks = Array.from({ length: Math.round((high - low) / step) + 1 }, (_, i) => low + i * step);
+    const fontSize = 11, limitGap = 8;
+    // Includes enough room for the sign and unit in the SVG chart's font.
+    const textWidth = text => text.length * 7;
+    const requiredGutter = (distance, room) => distance < 0.5
+      ? (room - distance * columnWidth) / (1 - 2 * distance) : 0;
+    const centerGutter = (value, text) => requiredGutter(Math.min(fraction(value), 1 - fraction(value)), textWidth(text) / 2 + 2);
+    const gutters = [...blocks.values()].flatMap(({ bounds, reference, measured, estimate }) => {
+      return [
+        ...(bounds ? [
+          requiredGutter(fraction(bounds[0]), textWidth(format(bounds[0])) + limitGap),
+          requiredGutter(1 - fraction(bounds[1]), textWidth(format(bounds[1])) + limitGap),
+        ] : []),
+        ...(reference !== null ? [centerGutter(reference, format(reference))] : []),
+        ...(measured !== null && estimate !== null ? [centerGutter(estimate, format(estimate))] : []),
+      ];
+    });
+    const gutter = Math.ceil(Math.max(16, ...gutters));
+    const hoverBlocks = [];
+    const { element, line, label } = chartElements(svg, height, width);
+    const arrow = (x, tip, color) => {
+      line(x, tip - 11, x, tip - 4, color, 1.3);
+      element('polygon', { points: `${x},${tip} ${x - 4},${tip - 6} ${x + 4},${tip - 6}`, fill: color });
+    };
+    const marker = (x, y, opacity = 1) => element('circle', {
+      cx: x, cy: y, r: 5.5, fill: '#fff', stroke: measuredColor, 'stroke-width': 2.1, opacity,
+    });
 
-    svg.setAttribute('aria-label', 'Six-hour home demand forecast errors. Forecast minus measured energy in kilowatt-hours.');
-    label(left, 42, 'Six-hour home demand forecast errors', 'start', 24, 700);
+    svg.setAttribute('aria-label', 'Six-hour home demand in ' + data.timezone + '. Ranges, measured demand and estimates use a shared kilowatt-hour scale.');
+    label(12, 26, 'Six-hour home demand forecast errors', 'start', 20, 700);
 
-    periods.forEach((period, row) => label(left - 10, top + (row + 0.5) * rowHeight + 4, period, 'end'));
-    for (const [column, day] of days.entries()) {
-      const columnLeft = left + column * (columnWidth + columnGap);
-      const x = value => columnLeft + (value - minimum) / (maximum - minimum) * columnWidth;
+    for (const [index, day] of days.entries()) {
+      const columnLeft = left + index * (columnWidth + columnGap);
+      const columnRight = columnLeft + columnWidth;
+      const x = value => columnLeft + gutter + fraction(value) * (columnWidth - 2 * gutter);
       const firstBlock = blocks.get(day + '02:00');
-      const dayName = day[0].toUpperCase() + day.slice(1);
-      const heading = Number.isFinite(firstBlock?.start) ? dayName + ' · ' + date.format(firstBlock.start * 1000) : dayName;
-      label(columnLeft + columnWidth / 2, top - 13, heading, 'middle', 14, 700);
-      element('rect', { x: columnLeft, y: top, width: columnWidth, height: bottom - top,
-        fill: day === 'current' ? '#fff' : plotColors.day });
-      for (let tick = minimum; tick <= maximum; tick++) {
-        line(x(tick), top, x(tick), bottom, tick === 0 ? plotColors.boundary : plotColors.grid, 0.8);
-        label(x(tick), bottom + 19, String(tick).replace('-', '−'), 'middle');
+      const heading = Number.isFinite(firstBlock?.start) ? date.format(firstBlock.start * 1000) : '';
+      if (heading) label(columnLeft + columnWidth / 2, bottom + 38, heading, 'middle', 14, 700);
+      element('rect', { x: columnLeft, y: top, width: columnWidth, height: panelHeight, fill: '#fff', stroke: plotColors.grid });
+      for (const tick of ticks) {
+        line(x(tick), top, x(tick), bottom, plotColors.grid, 0.7);
       }
-      line(columnLeft, bottom, columnLeft + columnWidth, bottom, plotColors.axis);
+      const usedTicks = [];
+      for (const tick of new Set([low, high, ...ticks])) {
+        const text = format(tick, false, 0);
+        const center = x(tick), half = textWidth(text) / 2;
+        if (center - half < columnLeft || center + half > columnRight ||
+          usedTicks.some(([other, radius]) => Math.abs(center - other) < half + radius + 4)) continue;
+        label(center, bottom + 16, text, 'middle', fontSize, 400, { fill: '#52615b' });
+        usedTicks.push([center, half]);
+      }
 
       for (const [row, period] of periods.entries()) {
         const block = blocks.get(day + period.slice(0, 5));
-        const y = top + (row + 0.5) * rowHeight;
-        const range = block?.range_kwh;
-        const hasRange = Array.isArray(range) && range.length === 2 && range.every(Number.isFinite) && range[0] <= range[1];
-        const hasMeasured = Number.isFinite(block?.measured_kwh);
-        const hasError = hasMeasured && Number.isFinite(block.error_kwh);
-        const group = element('g', {});
-        const details = [heading + ', ' + period];
-        if (hasRange) {
-          hasRanges = true;
-          details.push('Error range ' + format(range[0]) + ' to ' + format(range[1]));
-          const start = Math.max(minimum, range[0]), end = Math.min(maximum, range[1]);
-          if (start <= end) {
-            svgElement(group, 'line', { x1: x(start), x2: x(end), y1: y, y2: y,
-              stroke: rangeColor, 'stroke-width': 9, 'stroke-linecap': 'round' });
-          }
+        const rowTop = top + row * rowHeight;
+        const y = rowTop + rowHeight / 2;
+        if (index === 0) {
+          const reference = block ?? days.map(day => blocks.get(day + period.slice(0, 5))).find(Boolean);
+          const times = reference && Number.isFinite(reference.start) && Number.isFinite(reference.end)
+            ? clock.format(reference.start * 1000) + '–' + clock.format(reference.end * 1000) : '';
+          if (times) label(left - 7, y + 4, times, 'end', fontSize, 600);
         }
-        if (hasMeasured) {
-          details.push('Measured ' + format(block.measured_kwh));
-          svgElement(group, 'circle', { cx: x(0), cy: y, r: 6,
-            fill: '#fff', stroke: measuredColor, 'stroke-width': 2.5 });
+        if (row > 0) line(columnLeft, rowTop, columnRight, rowTop, plotColors.grid, 0.7);
+        if (!block) continue;
+        const { measured, estimate, reference, bounds } = block;
+        const hasMeasured = measured !== null;
+        const hasError = hasMeasured && Number.isFinite(block.error_kwh);
+        const rows = [];
+        let markerY = y;
+        if (bounds) {
+          const [lower, upper] = bounds;
+          const lowLabel = format(lower), highLabel = format(upper);
+          rows.push({ label: '90% range', value: lowLabel + ' to ' + highLabel, color: rangeColor });
+          const start = x(lower), end = x(upper);
+          element('rect', { x: start, y: y - 8, width: Math.max(1, end - start), height: 16, rx: 3,
+            fill: rangeColor, 'fill-opacity': hasMeasured ? 1 : 0.30 });
+          const limitsStyle = { 'dominant-baseline': 'central', opacity: hasMeasured ? 1 : 0.66 };
+          label(start - limitGap, y, lowLabel, 'end', fontSize, 400, limitsStyle);
+          label(end + limitGap, y, highLabel, 'start', fontSize, 400, limitsStyle);
+          const referenceX = x(reference);
+          const hitsLabel = (from, to) => referenceX + 7 > from && referenceX - 7 < to;
+          if (hitsLabel(start - limitGap - textWidth(lowLabel), start - limitGap) ||
+            hitsLabel(end + limitGap, end + limitGap + textWidth(highLabel))) markerY += 14;
+        }
+        if (reference !== null) {
+          const text = format(reference);
+          rows.push({ label: hasMeasured ? 'Measured demand' : 'Estimated demand', value: text, color: measuredColor });
+          marker(x(reference), markerY, hasMeasured ? 1 : 0.32);
+          label(x(reference), markerY + 22, text, 'middle', 12, 700, { fill: measuredColor, opacity: hasMeasured ? 1 : 0.55 });
+        }
+        if (hasMeasured && estimate !== null) {
+          const forecast = format(estimate);
+          const color = hasError ? colorForError(block.error_kwh) : forecastColor;
+          rows.push({ label: 'Estimated demand', value: forecast, color });
+          const position = x(estimate);
+          arrow(position, y - 8, color);
+          label(position, y - 22, forecast, 'middle', 12, 700, { fill: color });
+        } else if (reference === null || hasMeasured) {
+          rows.push({ label: 'Estimated demand', value: 'Unavailable' });
         }
         if (hasError) {
-          const error = block.error_kwh;
-          details.push('Forecast error ' + format(error));
-          if (error < minimum || error > maximum) {
-            const edge = x(error < minimum ? minimum : maximum);
-            const inside = edge + (error < minimum ? 9 : -9);
-            svgElement(group, 'polygon', { points: `${edge},${y} ${inside},${y - 6} ${inside},${y + 6}`, fill: errorColor });
-          } else {
-            svgElement(group, 'circle', { cx: x(error), cy: y, r: 4, fill: errorColor });
-          }
+          rows.push({ label: 'Forecast error', value: format(block.error_kwh, true), color: colorForError(block.error_kwh) });
         }
-        svgElement(group, 'title', {}, details.join('. '));
+        if (rows.length) {
+          hoverBlocks.push({
+            left: columnLeft, right: columnRight, top: rowTop, bottom: rowTop + rowHeight,
+            title: Number.isFinite(block.start) && Number.isFinite(block.end)
+              ? formatInterval(block.start, block.end) : heading,
+            rows,
+          });
+        }
       }
     }
 
-    const middle = (left + right) / 2;
-    label(middle, bottom + 45, 'Forecast − measured (kWh)', 'middle', 14);
-    const legendY = height - 31;
-    const legendStart = frame.width / 2 - 300;
-    if (hasRanges) {
-      element('line', { x1: legendStart, y1: legendY, x2: legendStart + 27, y2: legendY,
-        stroke: rangeColor, 'stroke-width': 7, 'stroke-linecap': 'round' });
+    label(width / 2, bottom + 61, 'Demand (kWh)', 'middle', 13);
+    const legendItems = [
+      ['90% range', (x, y) => element('rect', { x: x - 8, y: y - 3, width: 16, height: 6, rx: 2, fill: rangeColor })],
+      ['Demand', marker],
+      ['Estimated', (x, y) => arrow(x, y + 5, forecastColor)],
+    ];
+    const legendWidth = legendItems.reduce((total, [name]) => total + 21 + textWidth(name), 0) + 13 * (legendItems.length - 1);
+    let legendLeft = (width - legendWidth) / 2;
+    const legendY = bottom + 85;
+    for (const [name, symbol] of legendItems) {
+      symbol(legendLeft + 8, legendY);
+      label(legendLeft + 21, legendY + 4, name, 'start', 12);
+      legendLeft += 21 + textWidth(name) + 13;
     }
-    label(legendStart + 36, legendY + 4, hasRanges ? '02:00 study 90% range' : 'Study range unavailable');
-    element('circle', { cx: legendStart + 221, cy: legendY, r: 6, fill: '#fff', stroke: measuredColor, 'stroke-width': 2.5 });
-    label(legendStart + 237, legendY + 4, 'Measured (zero reference)');
-    element('circle', { cx: legendStart + 458, cy: legendY, r: 4, fill: errorColor });
-    label(legendStart + 474, legendY + 4, 'Saved forecast error');
+    window.SolarLoggerChartHover.attach(svg, (pointerX, pointerY) => {
+      const block = hoverBlocks.find(block => pointerX >= block.left && pointerX <= block.right
+        && pointerY >= block.top && pointerY < block.bottom);
+      return block ? { title: block.title, rows: block.rows } : null;
+    });
     return true;
   }
 
-  return { draw, drawErrors };
+  return { draw, drawErrors, dailyTotals };
 })();
