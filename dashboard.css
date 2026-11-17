@@ -139,22 +139,22 @@
 #solar-dashboard .solar-gauge-scale { display: flex; justify-content: space-between; margin: 3px 0 6px; color: var(--solar-muted); font-size: 11px; }
 #solar-dashboard .solar-battery-card p strong { color: var(--solar-ink); }
 #solar-dashboard .solar-battery-forecast { margin-top: 9px; padding-top: 8px; border-top: 1px solid #dcd1e6; }
-#solar-dashboard .solar-forecast-summary { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 4px 12px; }
-#solar-dashboard #solar-battery-forecast-time { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
-#solar-dashboard #solar-battery-forecast-rate:empty { display: none; }
+#solar-dashboard #solar-battery-forecast-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 7px;
+}
+#solar-dashboard #solar-battery-forecast-targets[hidden] { display: none; }
+#solar-dashboard #solar-battery-forecast-targets dd { margin: 0; }
+#solar-dashboard #solar-battery-forecast-targets dt,
+#solar-dashboard #solar-battery-forecast-targets time { color: var(--solar-muted); font-size: 11px; }
+#solar-dashboard #solar-battery-forecast-targets strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+#solar-dashboard #solar-battery-forecast-targets time:not([hidden]) { display: block; }
 #solar-dashboard .solar-battery-card { min-width: 0; }
 #solar-dashboard #solar-soc-gauge { display: block; width: min(52%, 130px); margin: 6px auto; color: var(--solar-battery-ink); }
 #solar-dashboard #solar-soc-gauge [hidden] { display: none; }
-#solar-dashboard #solar-battery-forecast-chart { display: block; width: 100%; height: 42px; }
 #solar-dashboard .solar-battery-metrics { display: grid; gap: 5px; text-align: center; }
-#solar-dashboard #solar-recharge-estimate:empty { display: none; }
-#solar-dashboard #solar-battery-forecast-chart[hidden] { display: none; }
-#solar-dashboard .solar-forecast-summary[hidden] { display: none; }
-#solar-dashboard #solar-battery-forecast-chart text { fill: var(--solar-muted); font: 11px "Segoe UI", system-ui, sans-serif; }
-#solar-dashboard #solar-battery-forecast-chart circle { fill: var(--solar-battery-ink); }
-#solar-dashboard .solar-forecast-gridline { stroke: #dcd1e6; }
-#solar-dashboard .solar-forecast-target { stroke: #b9acc4; stroke-dasharray: 3 4; }
-#solar-dashboard .solar-forecast-line { stroke: var(--solar-battery-ink); stroke-width: 2; stroke-dasharray: 6 4; }
 #solar-dashboard .solar-history { display: flex; flex-direction: column; }
 #solar-dashboard :is(.solar-chart-toolbar, .solar-date-controls, .solar-chart-controls) { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 #solar-dashboard .solar-chart-toolbar { justify-content: space-between; align-items: start; margin-bottom: 7px; }

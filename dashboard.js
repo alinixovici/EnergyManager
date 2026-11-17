@@ -12,14 +12,12 @@
   const empty = id('chart-empty');
   const tooltip = id('chart-tooltip');
   const gauge = id('soc-gauge');
-  const forecastChart = id('battery-forecast-chart');
   const zoomIn = id('chart-zoom-in');
   const zoomOut = id('chart-zoom-out');
   const handTool = id('chart-hand');
   const autoFit = id('chart-auto-fit');
   const xRangeButtons = [...root.querySelectorAll('.solar-x-range')];
   const minPowerSpan = 50;
-  const forecastMaxAge = 6 * 60000;
   const manageButton = id('manage-logs');
   const logManager = id('log-manager');
   const logMonth = id('log-month');
@@ -41,13 +39,7 @@
   let chartDrag;
   let busy = false;
   let pendingDateRefresh = false;
-  let forecast = { state: 'missing' };
-  let forecastRequest;
-  const forecastWindows = [10, 30, 60];
-  let forecastResults = new Map();
   let inverterSettings;
-  let forecastStamp;
-  let forecastChecked = 0;
 
   const utcDate = () => new Date().toISOString().slice(0, 10);
   const displayDate = value => value.split('-').reverse().join('-');
@@ -116,145 +108,7 @@
     return node;
   }
 
-  function forecastDuration(hours) {
-    const minutes = Math.max(1, Math.round(hours * 60));
-    const wholeHours = Math.floor(minutes / 60);
-    return wholeHours ? `${wholeHours} h ${minutes % 60} min` : `${minutes} min`;
-  }
-
-  function forecastClock(hours) {
-    const at = new Date(Date.parse(forecastStamp) + hours * 3600000);
-    if (!Number.isFinite(at.getTime())) return '';
-    return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
-  }
-
-  function drawForecast() {
-    forecastChart.replaceChildren();
-    const times = [...forecastResults.values()].map(result => {
-      const target = result.socPerHour < 0 ? rechargeThreshold() : 100;
-      return (target - result.current) / result.socPerHour;
-    }).filter(hours => Number.isFinite(hours) && hours > 0).sort((a, b) => a - b);
-    forecastChart.toggleAttribute('hidden', !times.length);
-    if (!times.length) return;
-    const width = forecastChart.clientWidth;
-    if (!width) return;
-    const min = times[0], max = times.at(-1);
-    const mean = times.reduce((sum, hours) => sum + hours, 0) / times.length;
-    const left = 20, right = width - 20;
-    const now = new Date();
-    const elapsed = (now.getTime() - Date.parse(forecastStamp)) / 3600000;
-    const span = Math.max(max - elapsed, 0.001);
-    const x = hours => left + (right - left) * Math.max(0, hours - elapsed) / span;
-    const currentTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    const ticks = [
-      ['Now', currentTime, left],
-      ['Min', forecastClock(min), x(min)],
-      ['Avg', forecastClock(mean), x(mean)],
-      ['Max', forecastClock(max), x(max)],
-    ];
-    forecastChart.setAttribute('viewBox', `0 0 ${width} 42`);
-    forecastChart.setAttribute('aria-label', ticks.map(([name, time]) => name + ' ' + time).join(', '));
-    forecastChart.append(svg('line', { x1: left, x2: right, y1: 22, y2: 22,
-      stroke: '#d9cde2', 'stroke-width': 3, 'stroke-linecap': 'round' }),
-      svg('line', { x1: x(min), x2: x(max), y1: 22, y2: 22,
-        stroke: 'var(--solar-battery-ink)', opacity: .45, 'stroke-width': 6, 'stroke-linecap': 'round' }));
-    let previousLabel;
-    for (const [name, time, position] of ticks) {
-      const average = name === 'Avg';
-      forecastChart.append(svg('line', { x1: position, x2: position,
-        y1: average ? 15 : 22, y2: average ? 26 : 29,
-        stroke: 'var(--solar-battery-ink)', 'stroke-width': 1.5 }));
-      if (!average && previousLabel && Math.abs(position - previousLabel.position) < 32) {
-        if (time === previousLabel.time) continue;
-        previousLabel.element.setAttribute('text-anchor', 'end');
-        const element = svg('text', { x: position + 2, y: 40,
-          'text-anchor': position + 34 <= width ? 'start' : 'end' }, time);
-        if (position + 34 > width) previousLabel.element.setAttribute('x', position - 34);
-        forecastChart.append(element);
-        previousLabel = { position, time, element };
-      } else {
-        const element = svg('text', { x: position, y: average ? 11 : 40, 'text-anchor': 'middle',
-          style: average ? 'font-weight:bold' : '' }, time);
-        forecastChart.append(element);
-        if (!average) previousLabel = { position, time, element };
-      }
-    }
-  }
-
-  function showForecast(result) {
-    forecast = result;
-    const ready = result.state === 'ready';
-    const messages = {
-      missing: 'Waiting for battery readings.',
-      stale: 'The latest battery reading is too old for a live estimate.',
-      idle: 'Battery idle. The forecast appears when charging or discharging resumes and there is a clear trend.',
-      reached: '',
-      short: 'Waiting for sufficient recent battery readings.',
-      mixed: 'Recent battery power changed direction or is too low for an estimate.',
-      flat: 'Recent SoC readings don’t show a clear trend yet.',
-      unavailable: 'Could not read recent battery data.',
-    };
-    const summary = id('battery-forecast-status');
-    const title = ready ? `Estimated time to ${result.target}%` : messages[result.state];
-    if (summary.textContent !== title) summary.textContent = title;
-    id('battery-forecast-time').hidden = !ready;
-    write('battery-forecast-time', ready ? forecastDuration(result.hours) : '');
-    write('battery-forecast-rate', '');
-    showRechargeEstimate();
-    const hasCurves = [...forecastResults.values()].some(item => Number.isFinite(item.socPerHour));
-    forecastChart.toggleAttribute('hidden', !hasCurves);
-    id('forecast-series').hidden = !hasCurves;
-    summary.closest('.solar-forecast-summary').hidden = !title || ready;
-    if (hasCurves) drawForecast();
-  }
-
-  function resetForecast(state = 'missing') {
-    forecastRequest = forecastStamp = undefined;
-    forecastChecked = 0;
-    forecastResults.clear();
-    showForecast({ state });
-  }
-
-  function refreshForecast(system, latestFile, pairs, serial) {
-    if (!system) { resetForecast(); return; }
-    const now = Date.now();
-    const windowMs = 60 * 60000;
-    const start = data.forecastStart(system.stamp, windowMs + 3 * 3600000);
-    if (!Number.isFinite(start)) { resetForecast(); return; }
-    if (now - new Date(system.stamp).getTime() > forecastMaxAge) {
-      if (forecast.state !== 'stale') resetForecast('stale');
-      return;
-    }
-    if (forecastRequest || forecastStamp === system.stamp || now - forecastChecked < 15000) return;
-    forecastChecked = now;
-    const startMonth = new Date(start).toISOString().slice(0, 7);
-    const preceding = startMonth !== system.stamp.slice(0, 7)
-      ? pairs.find(pair => pair.serial === serial && pair.month === startMonth)?.system : undefined;
-    const request = getFile(preceding).then(file => Promise.all(forecastWindows.map(async minutes =>
-      [minutes, await data.batteryForecast(latestFile, file, system, now, minutes * 60000)])));
-    forecastRequest = request;
-    request.then(results => {
-      if (forecastRequest !== request) return;
-      forecastStamp = system.stamp;
-      forecastResults = new Map(results);
-      const valid = results.map(([, result]) => result).filter(result => Number.isFinite(result.socPerHour));
-      const first = valid[0];
-      if (!first) {
-        showForecast(results[0][1]);
-      } else {
-        const meanDuration = target => valid.reduce((sum, result) =>
-          sum + (target - result.current) / result.socPerHour, 0) / valid.length;
-        const hours = meanDuration(first.target);
-        showForecast({ ...first, hours,
-          socPerHour: hours > 0 ? (first.target - first.current) / hours : first.socPerHour,
-          meanDuration });
-      }
-    }).catch(() => {
-      if (forecastRequest === request) showForecast({ state: 'unavailable' });
-    }).finally(() => {
-      if (forecastRequest === request) forecastRequest = undefined;
-    });
-  }
+  const batteryPrediction = data.batteryPlanForecast(root, () => window.energyCloud.readControl({ forecastOnly: true }));
 
   function powerTick(span) {
     const rough = Math.max(10, span / 5);
@@ -366,7 +220,7 @@
     const manifest = await (await readNas()).json();
     if (nasSource !== manifest.source) {
       cache = undefined;
-      resetForecast();
+      batteryPrediction.reset();
       showCurrent();
       drawChart(true);
       nasSource = manifest.source;
@@ -483,7 +337,7 @@
       write('log-message', 'Moved to ' + result.archive + '. Open that share as ' + result.account + ' in File Explorer to recover the files.');
       logMonth.value = '';
       cache = undefined;
-      resetForecast();
+      batteryPrediction.reset();
       refresh(true);
     } catch (error) {
       write('log-message', error.message);
@@ -508,12 +362,11 @@
 
       const result = await window.energyCloud.read(dateInput.value);
       if (!result) return;
-      const { system, meter, latestFile, previousFile, selectedFile, date } = result;
+      const { system, meter, selectedFile, date } = result;
       showCurrent('FD2324F695', system, meter);
       inverterSettings = { reserve: result.reserve };
-      const previous = previousFile ? [{ serial: 'FD2324F695', month: previousFile.name.slice(-11, -4), system: previousFile }] : [];
-      refreshForecast(system, latestFile, previous, 'FD2324F695');
-      showRechargeEstimate();
+      batteryPrediction.refresh(system);
+      showBatteryReserve();
       dateInput.max = system?.stamp.slice(0, 10) ?? utcDate();
       if (!dateInput.value || dateInput.value > dateInput.max) setChartDate(date);
       if (dateInput.value !== date) return;
@@ -524,7 +377,7 @@
       write('data-status', system ? 'Supabase · Latest sample ' + displayDate(system.stamp.slice(0, 10)) + ' ' + system.stamp.slice(11, 19) + ' UTC' : 'No cloud readings yet.');
       write('cloud-status', 'Connected to Supabase · Read-only dashboard');
     } catch (error) {
-      if (!forecastStamp || Date.now() - new Date(forecastStamp).getTime() > forecastMaxAge) resetForecast('unavailable');
+      batteryPrediction.refresh();
       write('data-status', `Could not load cloud readings. ${error.message || 'Reopen it to try again.'}`);
     } finally {
       busy = false;
@@ -636,11 +489,9 @@
   const chartObserver = new ResizeObserver(entries => {
     for (const { target } of entries) {
       if (target === chart && cache) drawChart();
-      if (target === forecastChart) drawForecast();
     }
   });
   chartObserver.observe(chart);
-  chartObserver.observe(forecastChart);
 
   function setChartDate(value) {
     dateInput.value = value;
@@ -700,23 +551,12 @@
     return Number.isInteger(reserve) && reserve >= 0 && reserve < 100 ? reserve + 1 : undefined;
   }
 
-  function showRechargeEstimate() {
+  function showBatteryReserve() {
     const reserve = rechargeThreshold();
     id('soc-reserve').setAttribute('stroke-dasharray', `${reserve ?? 0} 100`);
     id('soc-reserve').toggleAttribute('hidden', reserve == null);
-    const charging = forecast?.socPerHour > 0;
-    const target = charging ? 100 : reserve;
-    const output = id('recharge-estimate');
-    output.replaceChildren();
-    if (target == null || !Number.isFinite(forecast?.socPerHour) ||
-        (charging ? forecast.current >= target : forecast.current <= target)) return;
-    const hours = forecast.meanDuration?.(target) ?? (target - forecast.current) / forecast.socPerHour;
-    const clock = forecastClock(hours);
-    if (!clock) return;
-    const time = document.createElement('strong');
-    time.textContent = clock;
-    output.append(`Battery estimated ${charging ? 'full' : 'empty'} (SoC ${target}%) at `, time);
   }
+
   const registerDescriptions = {
     0: 'Inverter model type code',
     21: 'ARM firmware version code',
@@ -771,16 +611,14 @@
       const snapshot = await response.json();
       if (snapshot.state === 'waiting') {
         inverterSettings = undefined;
-        showRechargeEstimate();
-        drawForecast();
+        showBatteryReserve();
         id('control-values').replaceChildren();
         id('control-registers').replaceChildren();
         write('control-status', 'Waiting for the logger to read the inverter settings.');
         return;
       }
       inverterSettings = snapshot;
-      showRechargeEstimate();
-      drawForecast();
+      showBatteryReserve();
       showConfigRegisters(snapshot.banks);
       const fields = [
         ['Discharge cutoff', snapshot.cutoff],
@@ -817,6 +655,7 @@
       if (button.dataset.solarPanel === 'overview') drawChart(true);
     });
   }
+  window.addEventListener('energy-cloud-connected', batteryPrediction.reset);
   window.energyCloud.start(() => refresh(true));
   const timer = setInterval(() => {
     if (!root.isConnected) { clearInterval(timer); chartObserver.disconnect(); }

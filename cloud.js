@@ -165,7 +165,7 @@
         .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
       return () => source.removeChannel(channel);
     },
-    async readControl() {
+    async readControl({ forecastOnly = false } = {}) {
       if (!client) throw new Error('Connect to Supabase first.');
       const source = client;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -179,15 +179,20 @@
         }
         const start = new Date(metadata.start * 1000).toISOString();
         const end = new Date(metadata.end * 1000).toISOString();
-        const [history_soc, history, forecast, history_grid] = await Promise.all([
-          ...['history_soc', 'history', 'forecast'].map(series => controlPoints(source, series, start, end)),
-          Array.isArray(metadata.history_grid) ? metadata.history_grid
-            : recordedGrid(source, metadata.start, metadata.cutoff).catch(() => []),
+        const [forecast, ...history] = await Promise.all([
+          controlPoints(source, 'forecast', start, end),
+          ...(forecastOnly ? [] : [
+            ...['history_soc', 'history'].map(series => controlPoints(source, series, start, end)),
+            Array.isArray(metadata.history_grid) ? metadata.history_grid
+              : recordedGrid(source, metadata.start, metadata.cutoff).catch(() => []),
+          ]),
         ]);
         const latest = await controlPlan(source);
         if (client !== source) throw new Error('The Supabase connection changed.');
         if (latest?.time === plan.time && latest.metadata?.as_of === metadata.as_of) {
-          return { ...metadata, history_soc, history, forecast, history_grid };
+          if (forecastOnly) return { ...metadata, forecast };
+          const [history_soc, historyRows, history_grid] = history;
+          return { ...metadata, history_soc, history: historyRows, forecast, history_grid };
         }
       }
       throw new Error('The NAS is updating the Control plan. Try refreshing again.');
@@ -232,19 +237,11 @@
       const date = [selectedDate || '9999', latest ? stamp(latest).slice(0, 10) : new Date().toISOString().slice(0, 10)].sort()[0];
       if (!latest) return { date };
       const day = new Date(date + 'T00:00:00Z');
-      const end = new Date(latest.time).getTime();
-      const [history, recent] = await Promise.all([
-        range(day.toISOString(), new Date(+day + 86400000).toISOString()),
-        range(new Date(end - 246 * 60000).toISOString(), new Date(end + 1).toISOString()),
-      ]);
-      const month = stamp(latest).slice(0, 7);
-      const previous = recent.filter(row => stamp(row).slice(0, 7) !== month);
+      const history = await range(day.toISOString(), new Date(+day + 86400000).toISOString());
       return {
         date, system: record(latest), meter: record(latest),
         reserve: number(latest, 'battery_soc_reserve') ?? 4,
         selectedFile: history.length ? systemFile(history, date.slice(0, 7)) : undefined,
-        latestFile: systemFile(recent.filter(row => stamp(row).startsWith(month)), month),
-        previousFile: previous.length ? systemFile(previous, stamp(previous[0]).slice(0, 7)) : undefined,
       };
     },
   };

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Energy Manager 6.8 · alinix</title>
-  <link rel="stylesheet" href="./dashboard.css?v=1031">
+  <link rel="stylesheet" href="./dashboard.css?v=1032">
 </head>
 <body class="solar-dashboard-page">
 <main id="solar-console">
@@ -156,18 +156,13 @@
           </svg>
           <p class="solar-caption solar-battery-metrics">
             <span><strong id="solar-battery-today">—</strong> <span id="solar-battery-energy-label">charged today</span></span>
-            <span id="solar-recharge-estimate" role="status"></span>
           </p>
           <div class="solar-battery-forecast">
-            <div class="solar-forecast-summary">
-              <div>
-                <strong id="solar-battery-forecast-time" hidden></strong>
-                <p id="solar-battery-forecast-status" class="solar-caption" role="status">Waiting for battery readings.</p>
-              </div>
-              <p id="solar-battery-forecast-rate" class="solar-caption"></p>
-            </div>
-            <svg id="solar-battery-forecast-chart" role="img" aria-label="Battery forecast time range" hidden></svg>
-            <p id="solar-forecast-series" class="solar-caption"></p>
+            <dl id="solar-battery-forecast-targets" hidden>
+              <div><dt>Time to 20%</dt><dd><strong>—</strong><time hidden></time></dd></div>
+              <div><dt>Time to full</dt><dd><strong>—</strong><time hidden></time></dd></div>
+            </dl>
+            <p id="solar-battery-forecast-status" class="solar-caption" role="status">Waiting for the charging plan.</p>
           </div>
         </section>
         <section class="solar-card solar-history" aria-labelledby="solar-history-title">
@@ -233,13 +228,13 @@
   </section>
   <div id="solar-chart-tooltip" class="solar-tooltip" aria-hidden="true" hidden></div>
 </main>
-<script src="./dashboard-data.js?v=609"></script>
+<script src="./dashboard-data.js?v=610"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=1042"></script>
+<script src="./cloud.js?v=1043"></script>
 
 <script src="./forecast-chart.js?v=1055"></script>
 <script src="./cloud-forecast.js?v=1042"></script>
 <script src="./command-chart.js?v=1020"></script>
-<script src="./dashboard.js?v=964"></script>
+<script src="./dashboard.js?v=965"></script>
 </body>
 </html>

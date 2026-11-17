@@ -5,9 +5,6 @@
   const filePattern = /^([A-Z0-9]{10}) (System|Meter) Data (\d{4}-\d{2})\.csv$/;
   const lineWindow = 4096;
   const chunkSize = 1024 * 1024;
-  const forecastWindow = 15 * 60 * 1000;
-  const maxSampleGap = 6 * 60 * 1000;
-  const idleWatts = 25;
   const decoder = new TextDecoder();
 
   function filePairs(files) {
@@ -65,107 +62,107 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function forecastStart(stamp, windowMs = forecastWindow) {
-    return new Date(stamp).getTime() - windowMs;
+  function batterySocTimes(plan, now, liveSoc) {
+    if (plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
+    const segments = plan.forecast.filter(row =>
+      [row.time, row.end, row.soc, row.end_soc].every(Number.isFinite) &&
+      row.end > Math.max(now, row.time) && row.soc >= 0 && row.soc <= 100 &&
+      row.end_soc >= 0 && row.end_soc <= 100);
+    if (!segments.length) return null;
+
+    const currentSegment = segments.find(row => row.time <= now);
+    const projectedSoc = currentSegment ? currentSegment.soc +
+      (currentSegment.end_soc - currentSegment.soc) * (now - currentSegment.time) /
+        (currentSegment.end - currentSegment.time) : null;
+    const current = liveSoc ?? projectedSoc;
+    const results = [20, 100].map(target => {
+      const reached = soc => target === 20 ? soc <= target : soc >= target;
+      if (current !== null && reached(current)) return { at: now, projected: liveSoc === null };
+      let at = Infinity;
+      for (const row of segments) {
+        const change = row.end_soc - row.soc;
+        if (reached(row.soc) || !reached(row.end_soc) || change === 0) continue;
+        const crossing = row.time + (target - row.soc) * (row.end - row.time) / change;
+        if (crossing >= now) at = Math.min(at, crossing);
+      }
+      return Number.isFinite(at) ? { at } : {
+        limited: target === 100 && Number.isFinite(plan.maximum_operating_soc) &&
+          plan.maximum_operating_soc < 100 ? plan.maximum_operating_soc : null,
+      };
+    });
+    return { results, through: Math.max(...segments.map(row => row.end)) };
   }
 
-  async function batteryForecast(file, precedingFile, latestRow, now = Date.now(), windowMs = forecastWindow, history) {
-    if (!latestRow) return { state: 'missing' };
-    const end = new Date(latestRow.stamp).getTime();
-    if (!Number.isFinite(end) || now - end > maxSampleGap) return { state: 'stale' };
-    const current = latestRow.number('SOC%');
-    const power = latestRow.number('PBat');
-    if (current == null || current < 0 || current > 100 || power == null) return { state: 'missing' };
-    if (Math.abs(power) < idleWatts) return { state: 'idle' };
-    const target = power > 0 ? 20 : 100;
-    if (power < 0 && current >= target) return { state: 'reached', target };
+  function batteryPlanForecast(root, readPlan) {
+    const summary = root.querySelector('#solar-battery-forecast-status');
+    const list = root.querySelector('#solar-battery-forecast-targets');
+    const targets = [...list.querySelectorAll('dd')];
+    let sample, plan, request;
+    let lastCheck = 0;
+    const write = (element, text) => {
+      if (element.textContent !== text) element.textContent = text;
+    };
 
-    const start = forecastStart(latestRow.stamp, windowMs);
-    // A bounded read covers the window even at the one-second sampling rate.
-    const readSize = 256 * 1024 * Math.ceil(windowMs / forecastWindow);
-    const recent = history ?? await tail(file, readSize);
-    const rows = !history && precedingFile && (!recent.length || Date.parse(recent[0].stamp) > start)
-      ? [...await tail(precedingFile, readSize), ...recent] : recent;
-    const samples = new Map();
-    for (const row of [...rows, latestRow]) {
-      const at = new Date(row.stamp).getTime();
-      const watts = row.number('PBat');
-      const soc = row.number('SOC%');
-      if (at >= start - maxSampleGap && at <= end && watts != null && soc != null && soc >= 0 && soc <= 100) {
-        samples.set(at, { at, watts, soc });
+    function render(now) {
+      const soc = sample?.number('SOC%');
+      const age = now * 1000 - Date.parse(sample?.stamp);
+      const current = Number.isFinite(soc) && soc >= 0 && soc <= 100 && age >= -60000 && age <= 360000 ? soc : null;
+      const prediction = batterySocTimes(plan, now, current);
+      list.hidden = prediction === null;
+      if (!prediction) {
+        write(summary, plan === undefined && request ? 'Loading the charging plan…' : 'Battery SOC forecast unavailable.');
+        return;
       }
-    }
-    const sorted = [...samples.values()].sort((a, b) => a.at - b.at);
-    const first = sorted.findLastIndex(sample => sample.at <= start);
-    const window = first < 0 ? [] : sorted.slice(first);
-    const minimumSamples = windowMs === 10 * 60000 ? 3 : 4;
-    if (window.length < minimumSamples || window.some((sample, i) => i > 0 && sample.at - window[i - 1].at > maxSampleGap)) {
-      if (!history) {
-        // Try older complete windows at one-minute steps, up to three hours back.
-        const direction = Math.sign(power);
-        const historySize = 4 * chunkSize;
-        const older = [...await tail(precedingFile, historySize), ...await tail(file, historySize)];
-        let next = end - 60000;
-        for (let i = older.length - 1; i >= 0; i--) {
-          const row = older[i];
-          const at = Date.parse(row.stamp);
-          if (at < end - 3 * 3600000) break;
-          if (at > next || Math.sign(row.number('PBat')) !== direction) continue;
-          next = at - 60000;
-          const prior = await batteryForecast(file, precedingFile, row, at, windowMs, older);
-          if (!Number.isFinite(prior.socPerHour) || Math.sign(prior.socPerHour) !== -direction) continue;
-          const hours = (target - current) / prior.socPerHour;
-          return { ...prior, current, target, hours, historyEnd: row.stamp,
-            state: hours > 0 ? 'ready' : 'reached' };
+      const format = new Intl.DateTimeFormat('en-GB', { timeZone: plan.timezone || 'UTC', day: 'numeric',
+        month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
+      write(summary, 'Charging plan forecast through ' + format.format(prediction.through * 1000));
+      for (const [i, result] of prediction.results.entries()) {
+        const value = targets[i].querySelector('strong');
+        const time = targets[i].querySelector('time');
+        const minutes = Math.max(0, Math.ceil((result.at - now) / 60));
+        const hours = Math.floor(minutes / 60);
+        write(value, Number.isFinite(result.at)
+          ? (minutes === 0 ? (result.projected ? 'Forecast now' : 'Now') : hours
+            ? hours + ' h ' + minutes % 60 + ' min' : minutes + ' min')
+          : (result.limited === null ? 'No crossing in forecast' : 'Limited to ' + result.limited + '%'));
+        time.hidden = !Number.isFinite(result.at) || minutes === 0;
+        if (!time.hidden) {
+          time.dateTime = new Date(result.at * 1000).toISOString();
+          write(time, format.format(result.at * 1000));
         }
       }
-      return { state: 'short' };
-    }
-    if (window[0].at < start) {
-      const [before, after] = window;
-      const fraction = (start - before.at) / (after.at - before.at);
-      window[0] = {
-        at: start,
-        watts: before.watts + fraction * (after.watts - before.watts),
-        soc: before.soc + fraction * (after.soc - before.soc),
-      };
     }
 
-    let net = 0;
-    let gross = 0;
-    const energy = [0];
-    for (let i = 1; i < window.length; i++) {
-      const before = window[i - 1];
-      const after = window[i];
-      const duration = (after.at - before.at) / 2;
-      net += (before.watts + after.watts) * duration;
-      gross += (Math.abs(before.watts) + Math.abs(after.watts)) * duration;
-      energy.push(net / 3600000000); // Watt-milliseconds to kWh.
+    function refresh(system = sample) {
+      sample = system;
+      if (document.hidden || root.querySelector('#solar-overview').hidden) return;
+      const now = Date.now();
+      if (!request && now - lastCheck >= 60000) {
+        lastCheck = now;
+        const pending = request = Promise.resolve().then(readPlan);
+        pending.then(snapshot => {
+          if (request === pending) plan = snapshot;
+        }).catch(() => {
+          if (request === pending) plan = null;
+        }).finally(() => {
+          if (request !== pending) return;
+          request = undefined;
+          render(Date.now() / 1000);
+        });
+      }
+      render(now / 1000);
     }
-    const average = net / windowMs;
-    if (Math.abs(average) < idleWatts || Math.sign(average) !== Math.sign(power) || Math.abs(net) < gross / 2) {
-      return { state: 'mixed', average };
-    }
-    if ((window[0].soc - current) * Math.sign(average) < 1) return { state: 'flat', average };
 
-    // Fit measured SoC against cumulative battery energy, then project at the recent average power.
-    const meanEnergy = energy.reduce((sum, value) => sum + value, 0) / energy.length;
-    const meanSoc = window.reduce((sum, sample) => sum + sample.soc, 0) / window.length;
-    let covariance = 0;
-    let variance = 0;
-    for (let i = 0; i < window.length; i++) {
-      const difference = energy[i] - meanEnergy;
-      covariance += difference * (window[i].soc - meanSoc);
-      variance += difference ** 2;
+    function reset() {
+      sample = plan = request = undefined;
+      lastCheck = 0;
+      list.hidden = true;
+      write(summary, 'Waiting for the charging plan.');
     }
-    const slope = covariance / variance;
-    const socPerHour = slope * average / 1000;
-    if (slope < 0 && power > 0 && current <= target) {
-      return { state: 'reached', current, target, socPerHour };
-    }
-    const hours = (target - current) / socPerHour;
-    if (!(slope < 0 && Number.isFinite(hours) && hours > 0)) return { state: 'flat', average };
-    return { state: 'ready', current, target, average, hours, socPerHour };
+
+    root.querySelector('[aria-controls="solar-overview"], [data-solar-panel="overview"]')
+      ?.addEventListener('click', () => setTimeout(refresh, 0));
+    return { refresh, reset };
   }
 
   // Search by byte offset, moving each boundary to a complete CSV row.
@@ -243,7 +240,7 @@
     })) : [];
   }
 
-  window.solarDashboardData = { filePairs, latest, history, points, batteryForecast, forecastStart };
+  window.solarDashboardData = { filePairs, latest, history, points, batteryPlanForecast };
 })();
 
 (() => {
