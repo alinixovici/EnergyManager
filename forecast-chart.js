@@ -42,12 +42,12 @@ const SolarGeneration = (() => {
       return {
         estimated: sum([...past, ...forecast]),
         measured: demand && Object.prototype.hasOwnProperty.call(data, 'measured_today_kwh')
-          ? data.measured_today_kwh : sum(measured),
+          ? data.measured_today_kwh : sum(data.measured_energy ?? measured),
       };
     }
     return {
       estimated: sum(past, new Map(measured)),
-      measured: sum(measured, new Map(past)),
+      measured: sum(data.measured_energy ?? measured, new Map(past)),
     };
   }
 
@@ -88,7 +88,7 @@ const SolarGeneration = (() => {
     if (!series.length) {
       warning = [warning, 'No saved forecast or measured values are available in this date range.'].filter(Boolean).join(' ');
     }
-    const cutoff = demand && Number.isFinite(data.latest_reading) ? data.latest_reading : data.download;
+    const cutoff = data.measured_through ?? (demand && Number.isFinite(data.latest_reading) ? data.latest_reading : data.download);
     const inWindow = time => Number.isFinite(time) && time >= start && time < end;
     const liveCursor = inWindow(cursorTime);
     const cursor = liveCursor ? cursorTime : inWindow(cutoff) ? cutoff : null;
@@ -210,11 +210,12 @@ const SolarGeneration = (() => {
         'stroke-width': color === '#000000' ? 2.8 : 2.4, 'stroke-linejoin': 'round' });
     }
     function drawSegment(points, color, fill, continuation) {
-      const xy = points.map(([time, power]) => [x(time), y(power)]);
+      const through = fill ? data.measured_through ?? Infinity : Infinity;
+      const xy = points.map(([time, power]) => [x(demand ? time : Math.min(time, through)), y(power)]);
       if (demand) {
         let path = 'M' + xy[0].join(',');
         for (let i = 1; i < xy.length; i++) path += ' H' + xy[i][0] + ' V' + xy[i][1];
-        path += ' H' + x(Math.min(end, points[points.length - 1][0] + intervalSeconds));
+        path += ' H' + x(Math.min(end, through, points[points.length - 1][0] + intervalSeconds));
         if (fill) svgElement(plot, 'path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
         svgElement(plot, 'path', { d: path, fill: 'none', stroke: color, 'stroke-width': 2.4 });
         return;
@@ -311,11 +312,14 @@ const SolarGeneration = (() => {
       if (pointerX < left || pointerX > right || pointerY < top || pointerY > bottom) return null;
       const time = start + (pointerX - left) / (right - left) * (end - start);
       // Demand is plotted as interval steps. Solar values are plotted at the end of each hour.
+      const partial = !demand && data.measured_through % intervalSeconds !== 0 &&
+        time <= data.measured_through && time > Math.floor(data.measured_through / intervalSeconds) * intervalSeconds;
       const sample = demand
         ? Math.floor(Math.min(time, end - 1) / intervalSeconds) * intervalSeconds
-        : Math.round(time / intervalSeconds) * intervalSeconds;
+        : (partial ? Math.ceil(data.measured_through / intervalSeconds) : Math.round(time / intervalSeconds)) * intervalSeconds;
       const rows = [];
-      for (const { values, label, color } of hoverSeries) {
+      for (const { values, label, color, fill } of hoverSeries) {
+        if (fill && time > data.measured_through) continue;
         const value = values.get(sample);
         if (Number.isFinite(value)) rows.push({ label, value: value.toFixed(2) + unit, color });
       }
@@ -324,7 +328,7 @@ const SolarGeneration = (() => {
       return {
         title: formatInterval(first, first + intervalSeconds),
         rows,
-        guide: { x: demand ? pointerX : x(sample), top, bottom },
+        guide: { x: demand ? pointerX : x(partial ? data.measured_through : sample), top, bottom },
       };
     });
     return { hasData: true, warning };
@@ -510,5 +514,132 @@ const SolarGeneration = (() => {
     return true;
   }
 
-  return { draw, drawErrors, dailyTotals };
+  function liveBuckets(rows, interval, field, maximumGap, start, end) {
+    const buckets = new Map();
+    for (let index = 1; index < rows.length; index++) {
+      const before = rows[index - 1], after = rows[index];
+      const span = after.time - before.time;
+      if (span <= 0 || span > maximumGap || !Number.isFinite(before[field]) ||
+          !Number.isFinite(after[field]) || before[field] < 0 || after[field] < 0) continue;
+      const change = after[field] - before[field];
+      if (field === 'grid' && change < 0) continue;
+      for (let left = Math.max(start, before.time); left < Math.min(end, after.time);) {
+        const time = Math.floor(left / interval) * interval;
+        const right = Math.min(end, after.time, time + interval);
+        const seconds = right - left;
+        // Interpolate power between adjacent samples, then integrate only the observed portion.
+        const value = field === 'grid' ? change * seconds / span
+          : (before[field] + change * ((left + right) / 2 - before.time) / span) * seconds / 3600000;
+        const bin = buckets.get(time) ?? { energy: 0, seconds: 0 };
+        bin.energy += value;
+        bin.seconds += seconds;
+        buckets.set(time, bin);
+        left = right;
+      }
+    }
+    return buckets;
+  }
+
+  function readingGap({ rows, sampleSeconds }) {
+    if (Number.isFinite(sampleSeconds) && sampleSeconds > 0) return 2 * sampleSeconds + 1;
+    const gaps = rows.slice(-21).map((row, index, tail) => index ? row.time - tail[index - 1].time : 0)
+      .filter(seconds => seconds > 0).sort((a, b) => a - b);
+    return 2 * (gaps[Math.floor(gaps.length / 2)] ?? 60) + 1;
+  }
+
+  function withLiveForecast(data, readings) {
+    const { rows } = readings;
+    if (!rows.length || !Number.isFinite(data.start) || !Number.isFinite(data.end)) return data;
+    const demand = data.kind === 'demand';
+    const interval = demand ? (data.interval_minutes || 60) * 60 : 3600;
+    const first = Math.floor(Math.max(data.start, rows[0].time) / interval) * interval;
+    const through = Math.min(data.end, rows.at(-1).time);
+    if (through <= data.start) return data;
+    const oldPoints = data.measured.filter(([time]) => demand ? time < first : time <= first);
+    const maximumGap = readingGap(readings);
+    const bins = liveBuckets(rows, interval, demand ? 'demand' : 'solar', maximumGap, data.start, through);
+    const points = demand ? [...bins].map(([time, bin]) => [time, bin.energy])
+      : [...bins].map(([time, bin]) => [time + interval, bin.energy * 3600 / bin.seconds]);
+    const updated = { ...data, measured: [...oldPoints, ...points], measured_through: through, latest_reading: through };
+    delete updated.measured_today_kwh;
+    if (!demand) {
+      updated.measured_energy = [...oldPoints, ...[...bins].map(([time, bin]) => [time + interval, bin.energy])];
+    }
+    if (demand && data.demand_range_blocks?.length) {
+      const halfHours = interval === 1800 ? bins : liveBuckets(rows, 1800, 'demand', maximumGap, data.start, through);
+      updated.demand_range_blocks = data.demand_range_blocks.map(block => {
+        if (block.start < first || block.end > through) return block;
+        let total = 0;
+        for (let time = block.start; time < block.end; time += 1800) {
+          const bin = halfHours.get(time);
+          if (!bin || bin.seconds < 0.8 * 1800) return block;
+          total += bin.energy;
+        }
+        const forecast = block.forecast_kwh;
+        return { ...block, measured_kwh: total, error_kwh: Number.isFinite(forecast) ? forecast - total : null };
+      });
+    }
+    return updated;
+  }
+
+  function withLiveControl(data, readings) {
+    const { rows } = readings;
+    if (!rows.length || !Number.isFinite(data.start) || !Number.isFinite(data.end)) return data;
+    const newest = Math.min(data.end, rows.at(-1).time);
+    const old = data.history_soc?.length ? data.history_soc : data.history ?? [];
+    const soc = new Map();
+    for (const row of rows) {
+      if (row.time < data.start || row.time > newest || !Number.isFinite(row.soc) || row.soc < 0 || row.soc > 100) continue;
+      soc.set(Math.floor(row.time / 60), { time: row.time, soc: row.soc });
+    }
+    const first = Math.max(data.start, rows[0].time);
+    const historySoc = new Map(old.flatMap(row => row.time < first ? [[row.time, row]]
+      : Number.isFinite(row.estimated_soc) ? [[row.time, { time: row.time, estimated_soc: row.estimated_soc }]] : []));
+    for (const row of soc.values()) historySoc.set(row.time, { ...historySoc.get(row.time), ...row });
+    const step = 1800;
+    const bins = liveBuckets(rows, step, 'grid', readingGap(readings), data.start, newest);
+    const historyGrid = bins.size ? [
+      ...(data.history_grid ?? []).filter(row => row.end <= Math.floor(first / step) * step),
+      ...[...bins].map(([time, bin]) => ({ time: Math.max(data.start, time), end: Math.min(newest, time + step), grid_kwh: bin.energy })),
+    ] : data.history_grid;
+    const plots = Object.fromEntries(Object.entries(data.energy_plots ?? {}).map(([key, plot]) =>
+      [key, plot ? withLiveForecast(plot, readings) : plot]));
+    return { ...data, cutoff: soc.size ? [...soc.values()].at(-1).time : data.cutoff,
+      measurement_gap: Math.max(61, readingGap(readings)),
+      history_soc: soc.size ? [...historySoc.values()].sort((a, b) => a.time - b.time) : data.history_soc,
+      history_grid: historyGrid, energy_plots: plots };
+  }
+
+  function liveView(read, visible, render, overlay = withLiveForecast) {
+    let snapshot, cached, running = false, pending = false;
+    async function refresh() {
+      if (!snapshot || !visible() || !Number.isFinite(snapshot.start)) return;
+      if (running) { pending = true; return; }
+      const current = snapshot;
+      running = true;
+      try {
+        const readings = await read(current.start);
+        if (snapshot !== current || !visible() || !readings.rows.length) return;
+        cached = readings;
+        render(overlay(current, readings));
+      } catch {
+        // Keep the last available display while the readings source reconnects.
+      } finally {
+        running = false;
+        if (pending) { pending = false; refresh(); }
+      }
+    }
+    window.addEventListener('energy-graph-sample', refresh);
+    return {
+      show(data) {
+        snapshot = data;
+        const result = render(cached ? overlay(snapshot, cached) : snapshot);
+        refresh();
+        return result;
+      },
+      reset() { snapshot = cached = null; },
+    };
+  }
+
+  return { draw, drawErrors, dailyTotals, liveView, withLiveControl };
 })();

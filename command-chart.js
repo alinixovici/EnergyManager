@@ -313,9 +313,11 @@
       const seconds = source.interval_minutes * 60;
       let path = '', previous = null;
       const segments = [];
-      for (const [stamp, value] of source[key]) {
+      const values = key === 'measured' && !isDemand ? source.measured_energy ?? source[key] : source[key];
+      for (const [stamp, value] of values) {
         const from = Math.max(start, isDemand ? stamp : stamp - seconds);
-        const until = Math.min(end, isDemand ? stamp + seconds : stamp);
+        const until = Math.min(end, isDemand ? stamp + seconds : stamp,
+          key === 'measured' ? source.measured_through ?? Infinity : Infinity);
         if (until <= from) continue;
         const plotted = isDemand ? -value : value;
         path += (from === previous ? 'L' : 'M') + x(from) + ' ' + energyY(plotted) + 'H' + x(until);
@@ -343,7 +345,7 @@
     }
     const historyGap = minuteHistory ? 300 : 3601;
     const replayResets = new Map((data.soc_replay_resets ?? []).map(reset => [reset.time, reset]));
-    socPath(socHistory, 'soc', lines.measuredSoc, historyGap);
+    socPath(socHistory, 'soc', lines.measuredSoc, data.measurement_gap ?? historyGap);
     socPath(socHistory, 'estimated_soc', lines.estimatedSoc, historyGap, replayResets);
     forecastSocPath('soc', 'end_soc', lines.forecastSoc);
     forecastSocPath('no_charge_soc', 'end_no_charge_soc', lines.unchargedSoc);
@@ -550,6 +552,11 @@
     }
   }
 
+  const livePlan = SolarGeneration.liveView(start => cloud.readMeasured(start),
+    () => !panel.hidden && !document.hidden, data => {
+      figure.hidden = !draw(data, timestampFormatters(data.timezone));
+    }, SolarGeneration.withLiveControl);
+
   async function refresh() {
     if (panel.hidden || document.hidden) return;
     if (loading) { pending = true; return; }
@@ -570,14 +577,17 @@
           solar: solar.status === 'fulfilled' ? publishedForecastData(solar.value, 'solar') : null,
         };
       }
-      render(data ? { ...data, energy_plots: energyPlots }
-        : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
+      const snapshot = data ? { ...data, energy_plots: energyPlots }
+        : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' };
+      render(snapshot);
+      livePlan.show(snapshot);
       summary.hidden = false;
     } catch (error) {
       if (connection === generation) {
         const message = error.code === '42501'
           ? 'Run control-read.sql in Supabase to enable Control reads.'
           : error.message || 'Could not read the Control plan from Supabase.';
+        livePlan.reset();
         render({ status: 'unavailable', message });
         summary.hidden = false;
       }
@@ -596,6 +606,7 @@
     generation++;
     clearTimeout(updateTimer);
     stopWatching?.();
+    livePlan.reset();
     render({});
     showButtonStatus(null);
     summary.hidden = true;

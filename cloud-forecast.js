@@ -108,25 +108,19 @@ function publishedDemandRangeBlocks(rows, demand) {
   return blocks;
 }
 
-function liveForecastChart(panel, chart, fallbackCursor = () => null) {
-  let data;
-  let cursor = null;
-  function draw(snapshot) {
-    data = snapshot;
-    const result = SolarGeneration.draw(chart, data, cursor ?? fallbackCursor(data));
+function liveForecastChart(panel, chart, onDraw = () => {}) {
+  const live = SolarGeneration.liveView(start => window.energyCloud.readMeasured(start),
+    () => !panel.hidden && !document.hidden, data => {
+    const result = SolarGeneration.draw(chart, data);
     chart.toggleAttribute('hidden', !result.hasData);
+    onDraw(data);
     return result;
-  }
-  window.addEventListener('energy-cloud-sample', event => {
-    const next = forecastChartTimestamp(event.detail);
-    if (next === cursor) return;
-    cursor = next;
-    if (data && !panel.hidden && !document.hidden) draw(data);
   });
+  const clear = () => { live.reset(); chart.setAttribute('hidden', ''); };
   return {
-    draw,
-    clear() { data = null; chart.setAttribute('hidden', ''); },
-    reset() { cursor = null; this.clear(); },
+    draw: live.show,
+    clear,
+    reset: clear,
   };
 }
 
@@ -209,7 +203,10 @@ function liveForecastChart(panel, chart, fallbackCursor = () => null) {
   const errorChart = document.getElementById('demand-error-chart');
   const errorScroll = document.getElementById('demand-error-chart-scroll');
   const errorStatus = document.getElementById('demand-error-status');
-  const plot = liveForecastChart(panel, chart, data => data.latest_reading);
+  const plot = liveForecastChart(panel, chart, data => {
+    errorData = data.demand_range_blocks ? { timezone: 'Europe/London', demand_range_blocks: data.demand_range_blocks } : null;
+    drawErrors();
+  });
   let request = 0;
   let loading = false;
   let pending = false;
@@ -243,15 +240,12 @@ function liveForecastChart(panel, chart, fallbackCursor = () => null) {
         plot.clear();
         throw new Error('No home demand forecast has been published.');
       }
+      if (diagnostics.status === 'fulfilled') data.demand_range_blocks = publishedDemandRangeBlocks(diagnostics.value, data);
       const result = plot.draw(data);
       status.textContent = result.warning;
-      errorData = diagnostics.status === 'fulfilled' ? {
-        timezone: 'Europe/London', demand_range_blocks: publishedDemandRangeBlocks(diagnostics.value, data),
-      } : null;
       errorStatus.textContent = diagnostics.status === 'rejected'
         ? diagnostics.reason.message || 'Could not load the home demand forecast errors.' : '';
       errorStatus.hidden = !errorStatus.textContent;
-      drawErrors();
     } catch (error) {
       if (id !== request) return;
       status.textContent = error.message;

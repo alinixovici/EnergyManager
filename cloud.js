@@ -7,6 +7,7 @@
     'Batt Charge Today', 'Combined Gen Today', 'Combined Gen Total',
     'Import Total', 'Export Total', 'Import Today', 'Export Today'];
   const column = name => name.toLowerCase().replaceAll(' ', '_').replaceAll('%', 'percent');
+  const graphColumns = ['time', ...['PPV', 'Load', 'SOC%', 'AC Charge Total'].map(column)].join(',');
   const stamp = row => new Date(row.time).toISOString().replace(/\.\d+Z$/, 'Z');
   const number = (row, name) => {
     const value = row[column(name)];
@@ -21,12 +22,14 @@
   let client;
   let newestSample = -Infinity;
   let stopSampleWatch;
+  let measuredCache;
   const table = () => client.from('energy_readings');
   function publishSample(row) {
     const time = Date.parse(row?.time);
     if (!Number.isFinite(time) || time <= newestSample) return;
     newestSample = time;
     window.dispatchEvent(new CustomEvent('energy-cloud-sample', { detail: stamp(row) }));
+    window.dispatchEvent(new Event('energy-graph-sample'));
   }
   async function query(request) {
     const { data, error } = await request;
@@ -45,6 +48,32 @@
       cursor = page.at(-1).time;
       inclusive = false;
     }
+  }
+  function readMeasured(start) {
+    const source = client;
+    if (!source) return Promise.resolve({ rows: [] });
+    const from = start - 7201;
+    if (!measuredCache || measuredCache.from > from || from - measuredCache.from > 86400) {
+      measuredCache = { from, next: from, rows: [], pending: Promise.resolve() };
+    }
+    const cache = measuredCache;
+    const through = Number.isFinite(newestSample) ? newestSample / 1000 + 1 : Date.now() / 1000 + 1;
+    const iso = time => new Date(time * 1000).toISOString();
+    const read = cache.pending.catch(() => {}).then(async () => {
+      if (cache.next < through) {
+        const samples = await range(iso(cache.next), iso(through), graphColumns, source);
+        if (client !== source) return { rows: [] };
+        for (const sample of samples) {
+          const time = Date.parse(sample.time) / 1000;
+          cache.rows.push({ time, solar: number(sample, 'PPV'), demand: number(sample, 'Load'),
+            soc: number(sample, 'SOC%'), grid: number(sample, 'AC Charge Total') });
+          cache.next = time + 1;
+        }
+      }
+      return client === source ? { rows: cache.rows.filter(row => row.time >= from) } : { rows: [] };
+    });
+    cache.pending = read;
+    return read;
   }
   const controlColumns = 'time,end_time,soc,estimated_soc,no_charge_soc,end_soc,end_no_charge_soc,'
     + 'demand_kwh,estimated_demand_kwh,solar_kwh,estimated_solar_kwh,grid_kwh';
@@ -118,6 +147,7 @@
     throw new Error('The NAS is updating the forecast. Try refreshing again.');
   }
   window.energyCloud = {
+    readMeasured,
     start(refresh) {
       function connect() {
         try {
@@ -137,6 +167,7 @@
           dashboard.hidden = false;
           stopSampleWatch?.();
           newestSample = -Infinity;
+          measuredCache = null;
           window.dispatchEvent(new Event("energy-cloud-connected"));
           const source = client;
           const channel = source.channel('forecast:energy_readings')
