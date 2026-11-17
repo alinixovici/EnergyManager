@@ -365,7 +365,7 @@
       const { system, meter, selectedFile, date } = result;
       showCurrent('FD2324F695', system, meter);
       inverterSettings = { reserve: result.reserve };
-      batteryPrediction.refresh(system);
+      batteryPrediction.refresh();
       showBatteryReserve();
       dateInput.max = system?.stamp.slice(0, 10) ?? utcDate();
       if (!dateInput.value || dateInput.value > dateInput.max) setChartDate(date);

@@ -62,79 +62,52 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function batterySocTimes(plan, now, liveSoc) {
+  function batteryReserveForecast(plan, now) {
     if (plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
-    const segments = plan.forecast.filter(row =>
-      [row.time, row.end, row.soc, row.end_soc].every(Number.isFinite) &&
-      row.end > Math.max(now, row.time) && row.soc >= 0 && row.soc <= 100 &&
-      row.end_soc >= 0 && row.end_soc <= 100);
-    if (!segments.length) return null;
-
-    const currentSegment = segments.find(row => row.time <= now);
-    const projectedSoc = currentSegment ? currentSegment.soc +
-      (currentSegment.end_soc - currentSegment.soc) * (now - currentSegment.time) /
-        (currentSegment.end - currentSegment.time) : null;
-    const current = liveSoc ?? projectedSoc;
-    const results = [20, 100].map(target => {
-      const reached = soc => target === 20 ? soc <= target : soc >= target;
-      if (current !== null && reached(current)) return { at: now, projected: liveSoc === null };
-      let at = Infinity;
-      for (const row of segments) {
-        const change = row.end_soc - row.soc;
-        if (reached(row.soc) || !reached(row.end_soc) || change === 0) continue;
-        const crossing = row.time + (target - row.soc) * (row.end - row.time) / change;
-        if (crossing >= now) at = Math.min(at, crossing);
-      }
-      return Number.isFinite(at) ? { at } : {
-        limited: target === 100 && Number.isFinite(plan.maximum_operating_soc) &&
-          plan.maximum_operating_soc < 100 ? plan.maximum_operating_soc : null,
-      };
-    });
-    return { results, through: Math.max(...segments.map(row => row.end)) };
+    const reserve = 20;
+    let hasForecast = false;
+    let at = Infinity;
+    for (const { time, end, soc, end_soc } of plan.forecast) {
+      const start = Math.max(now, time);
+      if (![time, end, soc, end_soc].every(Number.isFinite) || end <= start ||
+          soc < 0 || soc > 100 || end_soc < 0 || end_soc > 100) continue;
+      hasForecast = true;
+      const change = end_soc - soc;
+      const startSoc = soc + change * (start - time) / (end - time);
+      if (startSoc <= reserve) at = Math.min(at, start);
+      else if (end_soc <= reserve) at = Math.min(at, time + (reserve - soc) * (end - time) / change);
+    }
+    return hasForecast ? { at: Number.isFinite(at) ? at : null } : null;
   }
 
   function batteryPlanForecast(root, readPlan) {
-    const summary = root.querySelector('#solar-battery-forecast-status');
-    const list = root.querySelector('#solar-battery-forecast-targets');
-    const targets = [...list.querySelectorAll('dd')];
-    let sample, plan, request;
+    const status = root.querySelector('#solar-battery-reserve-forecast');
+    const label = status.querySelector('span');
+    const time = status.querySelector('time');
+    let plan, request;
     let lastCheck = 0;
-    const write = (element, text) => {
-      if (element.textContent !== text) element.textContent = text;
-    };
 
     function render(now) {
-      const soc = sample?.number('SOC%');
-      const age = now * 1000 - Date.parse(sample?.stamp);
-      const current = Number.isFinite(soc) && soc >= 0 && soc <= 100 && age >= -60000 && age <= 360000 ? soc : null;
-      const prediction = batterySocTimes(plan, now, current);
-      list.hidden = prediction === null;
-      if (!prediction) {
-        write(summary, plan === undefined && request ? 'Loading the charging plan…' : 'Battery SOC forecast unavailable.');
-        return;
-      }
+      const prediction = batteryReserveForecast(plan, now);
+      status.hidden = prediction === null;
+      if (!prediction) return;
+
+      const { at } = prediction;
+      const text = at === null ? 'Forecast stays above 20%' : at <= now ? '20% or lower now (forecast)' : '20% expected · ';
+      if (label.textContent !== text) label.textContent = text;
+      status.classList.toggle('is-low', at !== null);
+      time.hidden = at === null || at <= now;
+      if (time.hidden) return;
+
       const format = new Intl.DateTimeFormat('en-GB', { timeZone: plan.timezone || 'UTC', day: 'numeric',
-        month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
-      write(summary, 'Charging plan forecast through ' + format.format(prediction.through * 1000));
-      for (const [i, result] of prediction.results.entries()) {
-        const value = targets[i].querySelector('strong');
-        const time = targets[i].querySelector('time');
-        const minutes = Math.max(0, Math.ceil((result.at - now) / 60));
-        const hours = Math.floor(minutes / 60);
-        write(value, Number.isFinite(result.at)
-          ? (minutes === 0 ? (result.projected ? 'Forecast now' : 'Now') : hours
-            ? hours + ' h ' + minutes % 60 + ' min' : minutes + ' min')
-          : (result.limited === null ? 'No crossing in forecast' : 'Limited to ' + result.limited + '%'));
-        time.hidden = !Number.isFinite(result.at) || minutes === 0;
-        if (!time.hidden) {
-          time.dateTime = new Date(result.at * 1000).toISOString();
-          write(time, format.format(result.at * 1000));
-        }
-      }
+        month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      const date = new Date(at * 1000);
+      const formatted = format.format(date);
+      time.dateTime = date.toISOString();
+      if (time.textContent !== formatted) time.textContent = formatted;
     }
 
-    function refresh(system = sample) {
-      sample = system;
+    function refresh() {
       if (document.hidden || root.querySelector('#solar-overview').hidden) return;
       const now = Date.now();
       if (!request && now - lastCheck >= 60000) {
@@ -154,10 +127,9 @@
     }
 
     function reset() {
-      sample = plan = request = undefined;
+      plan = request = undefined;
       lastCheck = 0;
-      list.hidden = true;
-      write(summary, 'Waiting for the charging plan.');
+      status.hidden = true;
     }
 
     root.querySelector('[aria-controls="solar-overview"], [data-solar-panel="overview"]')
