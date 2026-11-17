@@ -62,77 +62,56 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function nextBatteryTarget(plan, now) {
-    if (plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
-    const reserve = Number.isFinite(plan.reserve) && plan.reserve >= 0 && plan.reserve <= 100 ? plan.reserve : null;
-    const full = 100;
-    let first, next;
+  function forecastBatteryTarget(plan, now, power) {
+    if (!Number.isFinite(power) || power === 0 || plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
+    const charging = power < 0;
+    const target = charging ? 100 : plan.reserve;
+    if (!Number.isFinite(target) || target < 0 || target > 100) return null;
+
+    let at = Infinity;
     for (const { time, end, soc, end_soc } of plan.forecast) {
-      const start = Math.max(now, time);
-      if (![time, end, soc, end_soc].every(Number.isFinite) || end <= start ||
-          soc < 0 || soc > full || end_soc < 0 || end_soc > full) continue;
+      if (![time, end, soc, end_soc].every(Number.isFinite) || end <= time || end < now ||
+          soc < 0 || soc > 100 || end_soc < 0 || end_soc > 100) continue;
+      const reachesTarget = charging ? soc < target && end_soc >= target : soc > target && end_soc <= target;
+      if (!reachesTarget) continue;
 
-      const change = end_soc - soc;
-      const startSoc = soc + change * (start - time) / (end - time);
-      if (!first || start < first.at) {
-        const target = startSoc >= full ? 'full' : reserve !== null && startSoc <= reserve ? 'reserve' : null;
-        first = { at: start, target };
-      }
-
-      const reachesReserve = reserve !== null && startSoc > reserve && end_soc <= reserve;
-      const reachesFull = startSoc < full && end_soc >= full;
-      if (!reachesReserve && !reachesFull) continue;
-
-      const threshold = reachesReserve ? reserve : full;
-      const at = time + (threshold - soc) * (end - time) / change;
-      if (!next || at < next.at) next = { at, target: reachesReserve ? 'reserve' : 'full' };
+      const crossing = time + (target - soc) * (end - time) / (end_soc - soc);
+      if (crossing >= now) at = Math.min(at, crossing);
     }
-    if (!first) return null;
-
-    if (first.target && first.at > now && (!next || first.at < next.at)) next = first;
-    return { reserve, ...(next || (first.target ? first : { at: null, target: null })) };
+    return Number.isFinite(at) ? { at, target, charging } : null;
   }
 
   function batteryPlanForecast(root, readPlan) {
     const status = root.querySelector('#solar-battery-reserve-forecast');
     const label = status.querySelector('span');
     const time = status.querySelector('time');
-    let plan, request;
+    let plan, request, batteryPower;
     let lastCheck = 0;
 
     function render(now) {
-      const prediction = nextBatteryTarget(plan, now);
+      const prediction = forecastBatteryTarget(plan, now, batteryPower);
       status.hidden = prediction === null;
       if (!prediction) return;
 
-      const { at, target, reserve } = prediction;
-      const name = target === 'reserve' ? 'Reserve ' + reserve + '%' : 'Full';
-      const future = at !== null && at > now;
-      let text = reserve === null ? 'Full not reached in forecast' : 'Neither target reached in forecast';
-      if (target && !future) text = name + ' now (forecast)';
-      if (future) {
-        const minutes = Math.ceil((at - now) / 60);
-        const hours = Math.floor(minutes / 60);
-        const duration = hours ? hours + 'h ' + minutes % 60 + 'm' : minutes + 'm';
-        text = name + ' · ' + duration + ' · ';
-      }
+      const { at, target, charging } = prediction;
+      const text = 'Estimated SoC ' + target + '% at ';
       if (label.textContent !== text) label.textContent = text;
-      status.classList.toggle('is-low', target === 'reserve');
-      time.hidden = !future;
-      if (!future) return;
+      status.classList.toggle('is-low', !charging);
 
-      const format = new Intl.DateTimeFormat('en-GB', { timeZone: plan.timezone || 'UTC', day: 'numeric',
-        month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
       const date = new Date(at * 1000);
-      const formatted = format.format(date);
+      const timeZone = plan.timezone || 'UTC';
+      const clock = date.toLocaleTimeString('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      const day = date.toLocaleDateString('en-GB', { timeZone, day: 'numeric', month: 'short' });
+      const formatted = clock + ' on ' + day;
       time.dateTime = date.toISOString();
       if (time.textContent !== formatted) time.textContent = formatted;
     }
 
-    function refresh() {
+    function refresh(power = batteryPower) {
+      batteryPower = power;
       if (document.hidden || root.querySelector('#solar-overview').hidden) return;
       const now = Date.now();
-      if (!request && now - lastCheck >= 60000) {
+      if (Number.isFinite(power) && power !== 0 && !request && now - lastCheck >= 60000) {
         lastCheck = now;
         const pending = request = Promise.resolve().then(readPlan);
         pending.then(snapshot => {
@@ -149,7 +128,7 @@
     }
 
     function reset() {
-      plan = request = undefined;
+      plan = request = batteryPower = undefined;
       lastCheck = 0;
       status.hidden = true;
     }
