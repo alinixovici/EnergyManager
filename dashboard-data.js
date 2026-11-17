@@ -62,22 +62,35 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function batteryReserveForecast(plan, now) {
+  function nextBatteryTarget(plan, now) {
     if (plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
-    const reserve = 20;
-    let hasForecast = false;
-    let at = Infinity;
+    const reserve = Number.isFinite(plan.reserve) && plan.reserve >= 0 && plan.reserve <= 100 ? plan.reserve : null;
+    const full = 100;
+    let first, next;
     for (const { time, end, soc, end_soc } of plan.forecast) {
       const start = Math.max(now, time);
       if (![time, end, soc, end_soc].every(Number.isFinite) || end <= start ||
-          soc < 0 || soc > 100 || end_soc < 0 || end_soc > 100) continue;
-      hasForecast = true;
+          soc < 0 || soc > full || end_soc < 0 || end_soc > full) continue;
+
       const change = end_soc - soc;
       const startSoc = soc + change * (start - time) / (end - time);
-      if (startSoc <= reserve) at = Math.min(at, start);
-      else if (end_soc <= reserve) at = Math.min(at, time + (reserve - soc) * (end - time) / change);
+      if (!first || start < first.at) {
+        const target = startSoc >= full ? 'full' : reserve !== null && startSoc <= reserve ? 'reserve' : null;
+        first = { at: start, target };
+      }
+
+      const reachesReserve = reserve !== null && startSoc > reserve && end_soc <= reserve;
+      const reachesFull = startSoc < full && end_soc >= full;
+      if (!reachesReserve && !reachesFull) continue;
+
+      const threshold = reachesReserve ? reserve : full;
+      const at = time + (threshold - soc) * (end - time) / change;
+      if (!next || at < next.at) next = { at, target: reachesReserve ? 'reserve' : 'full' };
     }
-    return hasForecast ? { at: Number.isFinite(at) ? at : null } : null;
+    if (!first) return null;
+
+    if (first.target && first.at > now && (!next || first.at < next.at)) next = first;
+    return { reserve, ...(next || (first.target ? first : { at: null, target: null })) };
   }
 
   function batteryPlanForecast(root, readPlan) {
@@ -88,16 +101,25 @@
     let lastCheck = 0;
 
     function render(now) {
-      const prediction = batteryReserveForecast(plan, now);
+      const prediction = nextBatteryTarget(plan, now);
       status.hidden = prediction === null;
       if (!prediction) return;
 
-      const { at } = prediction;
-      const text = at === null ? 'Forecast stays above 20%' : at <= now ? '20% or lower now (forecast)' : '20% expected · ';
+      const { at, target, reserve } = prediction;
+      const name = target === 'reserve' ? 'Reserve ' + reserve + '%' : 'Full';
+      const future = at !== null && at > now;
+      let text = reserve === null ? 'Full not reached in forecast' : 'Neither target reached in forecast';
+      if (target && !future) text = name + ' now (forecast)';
+      if (future) {
+        const minutes = Math.ceil((at - now) / 60);
+        const hours = Math.floor(minutes / 60);
+        const duration = hours ? hours + 'h ' + minutes % 60 + 'm' : minutes + 'm';
+        text = name + ' · ' + duration + ' · ';
+      }
       if (label.textContent !== text) label.textContent = text;
-      status.classList.toggle('is-low', at !== null);
-      time.hidden = at === null || at <= now;
-      if (time.hidden) return;
+      status.classList.toggle('is-low', target === 'reserve');
+      time.hidden = !future;
+      if (!future) return;
 
       const format = new Intl.DateTimeFormat('en-GB', { timeZone: plan.timezone || 'UTC', day: 'numeric',
         month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
