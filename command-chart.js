@@ -422,6 +422,18 @@
     dailyCharge.hidden = !entries.length;
   }
 
+  function renderSocReplayErrors(errors) {
+    const details = get('soc-errors');
+    const format = timestampFormatters('Europe/London');
+    const rows = (errors ?? []).map(block => {
+      const start = block.start * 1000, end = block.end * 1000;
+      const error = `${block.error_pp >= 0 ? '+' : ''}${block.error_pp.toFixed(1)} pp`;
+      return html('li', `${format.day.format(start)}, ${format.clock.format(start)}–${format.clock.format(end)} · ${error} (${block.estimated_soc.toFixed(1)}% estimated, ${block.measured_soc.toFixed(1)}% measured)`);
+    });
+    get('soc-error-list').replaceChildren(...rows);
+    details.hidden = !rows.length;
+  }
+
   function render(data) {
     const formatters = timestampFormatters(data.timezone);
     const windowLabel = values => Array.isArray(values) ? values.join(', ') || 'None' : null;
@@ -430,6 +442,7 @@
     const days = draw(data, formatters);
     figure.hidden = !days;
     renderDailyCharging(data, formatters, days || []);
+    renderSocReplayErrors(data.soc_replay_errors);
     const limits = [
       Number.isFinite(data.reserve) ? 'Reserve ' + data.reserve + '%' : null,
       Number.isFinite(data.target) ? 'Grid charge cap ' + data.target + '%' : null,
@@ -543,19 +556,19 @@
     panel.setAttribute('aria-busy', 'true');
     const buttonStatus = refreshButtonStatus(connection);
     try {
-      const [plan, demand, solar] = await Promise.allSettled([
-        cloud.readControl(), cloud.readDemandForecast(), cloud.readForecast(),
-      ]);
+      const data = await cloud.readControl();
       if (connection !== generation) return;
-      if (plan.status === 'rejected') throw plan.reason;
-      const data = plan.value;
-      render(data ? {
-        ...data,
-        energy_plots: {
+      let energyPlots = data?.energy_plots;
+      if (data && !energyPlots) {
+        const [demand, solar] = await Promise.allSettled([cloud.readDemandForecast(), cloud.readForecast()]);
+        if (connection !== generation) return;
+        energyPlots = {
           demand: demand.status === 'fulfilled' ? publishedForecastData(demand.value, 'demand') : null,
           solar: solar.status === 'fulfilled' ? publishedForecastData(solar.value, 'solar') : null,
-        },
-      } : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
+        };
+      }
+      render(data ? { ...data, energy_plots: energyPlots }
+        : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' });
       summary.hidden = false;
     } catch (error) {
       if (connection === generation) {

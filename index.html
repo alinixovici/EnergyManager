@@ -81,6 +81,10 @@
             <p class="solar-caption">Positive energy shows solar generation and battery charging from the grid. Negative energy shows household demand.</p>
           </figcaption>
         </figure>
+        <details class="solar-command-details" id="solar-command-soc-errors" hidden>
+          <summary>Six-hour SOC estimate errors (UK time)</summary>
+          <ul id="solar-command-soc-error-list"></ul>
+        </details>
         <section class="solar-command-details" id="solar-command-button-status" aria-labelledby="solar-command-button-status-title">
           <h3 id="solar-command-button-status-title">Proposed charging strategy</h3>
           <p id="solar-command-button-status-message" role="status">Waiting for the NAS button status.</p>
@@ -231,11 +235,11 @@
 </main>
 <script src="./dashboard-data.js?v=609"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./cloud.js?v=1041"></script>
+<script src="./cloud.js?v=1042"></script>
 
 <script src="./forecast-chart.js?v=1054"></script>
 <script src="./cloud-forecast.js?v=1041"></script>
-<script src="./command-chart.js?v=1019"></script>
+<script src="./command-chart.js?v=1020"></script>
 <script src="./dashboard.js?v=964"></script>
 </body>
 </html>

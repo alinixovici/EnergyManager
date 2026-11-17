@@ -33,12 +33,12 @@
     if (error) throw error;
     return data;
   }
-  async function range(from, to) {
+  async function range(from, to, columns = '*', source = client) {
     const rows = [];
     let cursor = from;
     let inclusive = true;
     for (;;) {
-      const request = table().select('*').lt('time', to).order('time').limit(1000);
+      const request = source.from('energy_readings').select(columns).lt('time', to).order('time').limit(1000);
       const page = await query(inclusive ? request.gte('time', cursor) : request.gt('time', cursor));
       if (!page.length) return rows;
       rows.push(...page);
@@ -49,6 +49,35 @@
   const controlColumns = 'time,end_time,soc,estimated_soc,no_charge_soc,end_soc,end_no_charge_soc,'
     + 'demand_kwh,estimated_demand_kwh,solar_kwh,estimated_solar_kwh,grid_kwh';
   const controlPlan = source => query(source.from('control_graph').select('time,metadata').eq('series', 'plan').maybeSingle());
+  async function recordedGrid(source, start, cutoff) {
+    if (!Number.isFinite(cutoff) || cutoff <= start) return [];
+    const read = time => new Date(time * 1000).toISOString();
+    const readings = await range(read(start - 300), read(cutoff + 1), 'time,ac_charge_total', source);
+    const intervals = new Map();
+    let previous;
+    for (const row of readings) {
+      const time = Date.parse(row.time) / 1000;
+      const value = number(row, 'AC Charge Total');
+      if (!Number.isFinite(time) || value === null || value < 0) continue;
+      if (previous) {
+        const seconds = time - previous.time;
+        const change = value - previous.value;
+        if (seconds > 0 && seconds <= 300 && change > 0) {
+          for (let from = Math.max(start, previous.time); from < Math.min(time, cutoff);) {
+            const block = Math.floor(from / 1800) * 1800;
+            const end = Math.min(time, cutoff, block + 1800);
+            intervals.set(block, (intervals.get(block) ?? 0) + change * (end - from) / seconds);
+            from = end;
+          }
+        }
+      }
+      previous = { time, value };
+    }
+    return [...intervals].map(([block, grid_kwh]) => ({
+      time: Math.max(start, block), end: Math.min(cutoff, block + 1800), grid_kwh,
+    }));
+  }
+
   async function controlPoints(source, series, start, end) {
     const rows = [];
     let cursor;
@@ -150,12 +179,15 @@
         }
         const start = new Date(metadata.start * 1000).toISOString();
         const end = new Date(metadata.end * 1000).toISOString();
-        const [history_soc, history, forecast] = await Promise.all(['history_soc', 'history', 'forecast']
-          .map(series => controlPoints(source, series, start, end)));
+        const [history_soc, history, forecast, history_grid] = await Promise.all([
+          ...['history_soc', 'history', 'forecast'].map(series => controlPoints(source, series, start, end)),
+          Array.isArray(metadata.history_grid) ? metadata.history_grid
+            : recordedGrid(source, metadata.start, metadata.cutoff).catch(() => []),
+        ]);
         const latest = await controlPlan(source);
         if (client !== source) throw new Error('The Supabase connection changed.');
         if (latest?.time === plan.time && latest.metadata?.as_of === metadata.as_of) {
-          return { ...metadata, history_soc, history, forecast };
+          return { ...metadata, history_soc, history, forecast, history_grid };
         }
       }
       throw new Error('The NAS is updating the Control plan. Try refreshing again.');
