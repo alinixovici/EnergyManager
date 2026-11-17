@@ -65,12 +65,13 @@ function publishedForecastData(rows, kind) {
 
 function publishedDemandRangeBlocks(rows, demand) {
   const interval = demand.interval_minutes * 60;
-  const estimates = new Map([...demand.past, ...demand.forecast]);
-  function blockEstimate(start, end) {
+  const historical = new Map(demand.past);
+  const estimates = new Map([...historical, ...demand.forecast]);
+  function blockEstimate(points, start, end) {
     let estimate = 0;
     for (let from = start; from < end;) {
       const bin = Math.floor(from / interval) * interval;
-      const value = estimates.get(bin);
+      const value = points.get(bin);
       if (!Number.isFinite(value)) return null;
       const until = Math.min(end, bin + interval);
       estimate += value * (until - from) / interval;
@@ -86,7 +87,8 @@ function publishedDemandRangeBlocks(rows, demand) {
       day: row.day, period: row.period, start, end, measured_kwh: measured, error_kwh: error,
       range_kwh: [forecastChartNumber(row.range_low_kwh), forecastChartNumber(row.range_high_kwh)],
       forecast_kwh: measured !== null && error !== null ? measured + error : null,
-      forecast_average_kwh: blockEstimate(start, end),
+      historical_estimate_kwh: measured !== null && error === null ? blockEstimate(historical, start, end) : null,
+      forecast_average_kwh: blockEstimate(estimates, start, end),
     }];
   });
   if (!blocks.some(block => block.day === 'next2')) {
@@ -100,7 +102,7 @@ function publishedDemandRangeBlocks(rows, demand) {
     for (const block of blocks.filter(entry => entry.day === 'next')) {
       const start = tomorrow(block.start), end = tomorrow(block.end);
       blocks.push({ ...block, day: 'next2', start, end, measured_kwh: null, error_kwh: null, forecast_kwh: null,
-        forecast_average_kwh: blockEstimate(start, end) });
+        historical_estimate_kwh: null, forecast_average_kwh: blockEstimate(estimates, start, end) });
     }
   }
   return blocks;

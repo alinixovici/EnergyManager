@@ -343,13 +343,16 @@ const SolarGeneration = (() => {
     const periods = ['02:00–08:00', '08:00–14:00', '14:00–20:00', '20:00–02:00'];
     const blocks = new Map(rangeBlocks.map(block => {
       const measured = Number.isFinite(block.measured_kwh) ? block.measured_kwh : null;
-      const estimate = Number.isFinite(block.forecast_kwh) ? block.forecast_kwh : null;
+      const savedEstimate = Number.isFinite(block.forecast_kwh) ? block.forecast_kwh : null;
+      const historicalEstimate = Number.isFinite(block.historical_estimate_kwh) ? block.historical_estimate_kwh : null;
+      const estimate = savedEstimate ?? historicalEstimate;
+      const estimateLabel = savedEstimate === null && historicalEstimate !== null ? 'Historical demand estimate' : 'Estimated demand';
       const reference = measured ?? (Number.isFinite(block.forecast_average_kwh) ? block.forecast_average_kwh : null);
       const offsets = block.range_kwh;
       const bounds = reference !== null && Array.isArray(offsets) && offsets.length === 2 &&
         offsets.every(Number.isFinite) && offsets[0] <= offsets[1]
         ? offsets.map(offset => Math.max(0, reference + offset)) : null;
-      return [block.day + block.period, { ...block, measured, estimate, reference, bounds }];
+      return [block.day + block.period, { ...block, measured, estimate, estimateLabel, reference, bounds }];
     }));
     const date = new Intl.DateTimeFormat('en-GB', { timeZone: data.timezone, day: 'numeric', month: 'short' });
     const clock = new Intl.DateTimeFormat('en-GB', {
@@ -436,7 +439,7 @@ const SolarGeneration = (() => {
         }
         if (row > 0) line(columnLeft, rowTop, columnRight, rowTop, plotColors.grid, 0.7);
         if (!block) continue;
-        const { measured, estimate, reference, bounds } = block;
+        const { measured, estimate, estimateLabel, reference, bounds } = block;
         const hasMeasured = measured !== null;
         const hasError = hasMeasured && Number.isFinite(block.error_kwh);
         const rows = [];
@@ -465,7 +468,7 @@ const SolarGeneration = (() => {
         if (hasMeasured && estimate !== null) {
           const forecast = format(estimate);
           const color = hasError ? colorForError(block.error_kwh) : forecastColor;
-          rows.push({ label: 'Estimated demand', value: forecast, color });
+          rows.push({ label: estimateLabel, value: forecast, color });
           const position = x(estimate);
           arrow(position, y - 8, color);
           label(position, y - 22, forecast, 'middle', 12, 700, { fill: color });
