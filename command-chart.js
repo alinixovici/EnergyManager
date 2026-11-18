@@ -13,7 +13,6 @@
   const figure = get('figure');
   const chart = get('chart');
   const { figureLayout, responsiveFigureWidth } = window.solarDashboardData;
-  const legend = get('legend');
   const asOf = get('as-of');
   const windows = get('windows');
   const defaults = get('defaults');
@@ -37,12 +36,12 @@
     estimatedSoc: { label: 'Historical SOC estimate', color: '#c34c12', dash: '6 4' },
     forecastSoc: { label: 'SOC with proposed grid charge', color: '#6235a7', weight: 3 },
     unchargedSoc: { label: 'SOC without proposed grid charge', color: '#087f57', dash: '7 5' },
-    reserve: { label: 'Battery reserve', color: '#000', dash: '6 4' },
-    gridTarget: { label: 'Grid charge cap', color: '#000', dash: '6 4' },
-    measuredDemand: { label: 'Demand measured', color: '#526b16', weight: 2.2 },
+    reserve: { label: 'Battery reserve', color: '#8b949c', dash: '3 4' },
+    gridTarget: { label: 'Grid charge cap', color: '#8b949c', dash: '3 4' },
+    measuredDemand: { label: 'Demand measured', color: '#526b16', weight: 2.2, shade: true },
     estimatedDemand: { label: 'Demand estimated', color: '#b4491c' },
     forecastDemand: { label: 'Demand forecast', color: '#41474d' },
-    measuredSolar: { label: 'Solar measured', color: '#008454', weight: 2.2 },
+    measuredSolar: { label: 'Solar measured', color: '#008454', weight: 2.2, shade: true },
     estimatedSolar: { label: 'Solar estimated', color: '#b4491c', weight: 2.5 },
     forecastSolar: { label: 'Solar forecast', color: '#101417', weight: 2.5 },
     recordedGrid: { label: 'Recorded grid charge', color: '#8999ae', bar: true },
@@ -103,7 +102,6 @@
     const minuteHistory = Array.isArray(data.history_soc) && data.history_soc.length;
     const socHistory = minuteHistory ? data.history_soc : history;
     chart.replaceChildren();
-    legend.replaceChildren();
     const hover = window.SolarLoggerChartHover;
     if (!formatters) {
       hover?.clear(chart);
@@ -142,7 +140,7 @@
     const width = responsiveFigureWidth(chart, () => draw(data, formatters));
     const left = figureLayout.left, right = width - figureLayout.right, socHeader = 43, top = socHeader + cursorSpace;
     const socBottom = top + figureLayout.plotHeight;
-    const energyTop = socBottom + 76, energyHeader = energyTop + 75;
+    const energyTop = socBottom + 98, energyHeader = energyTop + 75;
     const energyPlotTop = energyHeader + cursorSpace, energyBottom = energyPlotTop + figureLayout.plotHeight;
     const plotBottoms = [socBottom, energyBottom];
     const x = stamp => left + (stamp - start) / (end - start) * (right - left);
@@ -160,13 +158,11 @@
     const upperTicks = Math.ceil(peak / step), lowerTicks = Math.ceil(trough / step);
     const energyY = value => energyBottom - (value + lowerTicks * step) / ((upperTicks + lowerTicks) * step) *
       (energyBottom - energyPlotTop);
-    const visibleLines = [];
     const socSeries = [], energySeries = [];
     const limits = [[data.reserve, lines.reserve], [data.target, lines.gridTarget]]
       .filter(([value]) => Number.isFinite(value));
     const limitLabel = ([value, appearance]) => appearance.label + ' ' + value + '%';
 
-    chart.setAttribute('viewBox', '0 0 ' + width + ' ' + (energyBottom + 54));
     svg('title', { id: 'solar-command-chart-title' }, 'Battery SOC and energy forecast');
     svg('desc', { id: 'solar-command-chart-desc' },
       ['The dotted vertical line marks the latest battery SOC reading. Solar and grid charge are positive and household demand is negative.',
@@ -268,7 +264,6 @@
       if (!path) return;
       svg('path', { d: path, fill: 'none', stroke, 'stroke-width': appearance.weight ?? 2,
         'stroke-linejoin': 'round', ...(appearance.dash ? { 'stroke-dasharray': appearance.dash } : {}) });
-      visibleLines.push(appearance);
     }
 
     function socPath(rows, key, appearance, maximumGap, resets) {
@@ -382,7 +377,6 @@
       }
       // A shared stop changes colour at the cursor without breaking the interval step.
       energyLine(segments, minutes, estimate, undefined, prediction, 'url(#' + id + ')');
-      visibleLines.push(prediction);
     }
 
     function gridBars(rows, appearance) {
@@ -392,7 +386,6 @@
         svg('rect', { x: x(row.time) + 1, y, width: Math.max(1, x(row.end) - x(row.time) - 2),
           height: energyY(0) - y, fill: appearance.color, opacity: 0.8 });
       }
-      if (bars.length) visibleLines.push(appearance);
       if (bars.length) energySeries.push({ appearance, segments: bars.map(row => [row.time, row.end, row.grid_kwh]) });
     }
 
@@ -431,16 +424,52 @@
       }
     }
 
-    for (const { label: title, color, dash, bar } of visibleLines) {
-      const item = html('span');
-      const swatch = html('i');
-      swatch.setAttribute('aria-hidden', 'true');
-      swatch.style.setProperty('--series-color', color);
-      if (dash) swatch.classList.add('is-dashed');
-      if (bar) swatch.classList.add('is-bar');
-      item.append(swatch, title);
-      legend.append(item);
+    function drawLegend(series, entries, baseline, name) {
+      const visible = new Set(series.flatMap(({ appearance, forecastAppearance }) => [appearance, forecastAppearance]));
+      const group = svg('g', { role: 'group', 'aria-label': name });
+      let position = left;
+      for (const [appearance, title, equivalent] of entries) {
+        if (!visible.has(appearance) && (!equivalent || !visible.has(equivalent))) continue;
+        const caption = label(position + 20, baseline, title, 'start', figureLayout.label);
+        group.append(caption);
+        const itemWidth = 30 + (caption.getComputedTextLength?.() || title.length * 7);
+        if (position > left && position + itemWidth > right) {
+          position = left;
+          baseline += 17;
+          caption.setAttribute('x', position + 20);
+          caption.setAttribute('y', baseline);
+        }
+        const center = baseline - 4;
+        if (appearance.bar || appearance.shade) {
+          group.append(svg('rect', { x: position, y: center - 3, width: 15, height: 6,
+            fill: appearance.color, opacity: appearance.bar ? 0.8 : 0.19 }));
+        }
+        if (!appearance.bar) {
+          const keyY = center - (appearance.shade ? 3 : 0);
+          group.append(svg('line', { x1: position, y1: keyY, x2: position + 15, y2: keyY, stroke: appearance.color,
+            'stroke-width': 2, ...(appearance.dash ? { 'stroke-dasharray': appearance.dash } : {}) }));
+        }
+        position += itemWidth;
+      }
+      return baseline;
     }
+    drawLegend(socSeries, [
+      [lines.measuredSoc, 'Measured'],
+      [lines.estimatedSoc, 'Past estimate'],
+      [lines.forecastSoc, 'With grid charge'],
+      [lines.unchargedSoc, 'Without grid charge'],
+    ], socBottom + 57, 'Battery legend');
+    const legendEnd = drawLegend(energySeries, [
+      [lines.measuredSolar, 'Solar measured'],
+      [lines.measuredDemand, 'Demand measured'],
+      [lines.estimatedSolar, 'Past estimates', lines.estimatedDemand],
+      [lines.forecastSolar, 'Solar forecast'],
+      [lines.forecastDemand, 'Demand forecast'],
+      [lines.recordedGrid, 'Recorded charge'],
+      [lines.automaticGrid, 'Automatic charge'],
+      [lines.manualGrid, 'Manual charge'],
+    ], energyBottom + 57, 'Energy legend');
+    chart.setAttribute('viewBox', '0 0 ' + width + ' ' + (legendEnd + 13));
     hover?.attach(chart, (px, py) => {
       if (px < left || px > right) return null;
       const isSoc = py >= top && py <= socBottom;
@@ -580,14 +609,23 @@
     const stale = Date.now() - timestamp > 5 * 60 * 1000;
     buttonStatusMessage.textContent = (stale ? 'Last known state · ' : 'NAS snapshot · ') + buttonTimestamp.format(timestamp);
     const switches = [
-      ['Mode', snapshot.automatic ? 'Automatic' : 'Manual'],
-      ['Inverter control', snapshot.inverter_control ? 'On' : 'Off'],
+      ['Mode', snapshot.automatic ? 'Automatic' : 'Manual', snapshot.automatic],
+      ['Inverter control', snapshot.inverter_control ? 'On' : 'Off', snapshot.inverter_control],
       ['Battery charging', snapshot.direct_charge ? 'On' : 'Off'],
       ['Discharge to grid', snapshot.direct_discharge ? 'On' : 'Off'],
     ];
-    for (const [name, value] of switches) {
+    for (const [name, value, on] of switches) {
       const pair = html('div');
-      pair.append(html('dt', name), html('dd', value));
+      const readout = html('dd', value);
+      if (typeof on === 'boolean') {
+        const toggle = html('span');
+        toggle.className = 'solar-command-switch';
+        toggle.dataset.on = String(on);
+        toggle.setAttribute('aria-hidden', 'true');
+        readout.className = 'solar-command-switch-readout';
+        readout.prepend(toggle);
+      }
+      pair.append(html('dt', name), readout);
       buttonSwitches.append(pair);
     }
 

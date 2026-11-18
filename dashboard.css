@@ -282,11 +282,20 @@
   display: block; width: 100%; min-width: 900px; height: auto; background: #fff; border: 1px solid var(--solar-edge);
   border-radius: 6px; color: #202c29; font-family: inherit; font-variant-numeric: tabular-nums;
 }
-#solar-dashboard #solar-command-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 7px 0 3px; }
-#solar-dashboard #solar-command-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
-#solar-dashboard #solar-command-legend i { display: inline-block; width: 16px; border-top: 2px solid var(--series-color); }
-#solar-dashboard #solar-command-legend i.is-dashed { border-top-style: dashed; }
-#solar-dashboard #solar-command-legend i.is-bar { height: 8px; border: 0; background: var(--series-color); }
+#solar-dashboard .solar-command-switch {
+  appearance: none; box-sizing: border-box; position: relative; display: inline-block; flex: none;
+  width: 34px; height: 20px; margin: 0; border: 0; border-radius: 12px; background: #cdd2d9;
+}
+#solar-dashboard .solar-command-switch::before {
+  content: ""; position: absolute; inset-block-start: 3px; inset-inline-start: 3px;
+  width: 14px; height: 14px; border-radius: 50%; background: #fff;
+}
+#solar-dashboard .solar-command-switch:is(:checked, [data-on="true"]) { background: #008454; }
+#solar-dashboard .solar-command-switch:is(:checked, [data-on="true"])::before { inset-inline-start: 17px; }
+@media (forced-colors: active) {
+  #solar-dashboard .solar-command-switch { outline: 1px solid ButtonText; }
+  #solar-dashboard .solar-command-switch::before { forced-color-adjust: none; background: ButtonText; }
+}
 #solar-dashboard .solar-command-details { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--solar-edge); }
 #solar-dashboard .solar-command-details h3 { margin: 0 0 4px; font-size: 15px; }
 #solar-dashboard .solar-command-details :is(ul, p) { margin: 4px 0; overflow-wrap: anywhere; }
@@ -299,6 +308,7 @@
 #solar-dashboard #solar-command-button-switches > div { padding: 5px 8px; border-radius: 5px; background: var(--solar-soft); }
 #solar-dashboard #solar-command-button-switches dt { color: var(--solar-muted); font-size: 11px; }
 #solar-dashboard #solar-command-button-switches dd { font-size: 13px; font-weight: 650; }
+#solar-dashboard .solar-command-switch-readout { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; }
 #solar-dashboard #solar-command-button-slots {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 4px;
   margin: 8px 0 0; padding: 0; list-style: none;
