@@ -39,14 +39,14 @@
     unchargedSoc: { label: 'SOC without proposed grid charge', color: '#087f57', dash: '7 5' },
     reserve: { label: 'Battery reserve', color: '#000', dash: '6 4' },
     gridTarget: { label: 'Grid charge cap', color: '#000', dash: '6 4' },
-    measuredDemand: { label: 'Demand measured', color: '#0072b2' },
-    estimatedDemand: { label: 'Demand estimated', color: '#c34c12', dash: '6 4' },
-    forecastDemand: { label: 'Demand forecast', color: '#6235a7' },
-    measuredSolar: { label: 'Solar measured', color: '#008043' },
-    estimatedSolar: { label: 'Solar estimated', color: '#b02a72', dash: '6 4' },
-    forecastSolar: { label: 'Solar forecast', color: '#996500' },
+    measuredDemand: { label: 'Demand measured', color: '#526b16', weight: 2.2 },
+    estimatedDemand: { label: 'Demand estimated', color: '#b4491c' },
+    forecastDemand: { label: 'Demand forecast', color: '#41474d' },
+    measuredSolar: { label: 'Solar measured', color: '#008454', weight: 2.2 },
+    estimatedSolar: { label: 'Solar estimated', color: '#b4491c', weight: 2.5 },
+    forecastSolar: { label: 'Solar forecast', color: '#101417', weight: 2.5 },
     recordedGrid: { label: 'Recorded grid charge', color: '#8999ae', bar: true },
-    automaticGrid: { label: 'Automatic grid charge', color: '#29364f', bar: true },
+    automaticGrid: { label: 'Automatic grid charge', color: '#6da9d6', bar: true },
     manualGrid: { label: 'Manual grid charge', color: '#bd5814', bar: true },
   };
 
@@ -264,9 +264,9 @@
       line(left, bottom, right, bottom, '#aab8af');
     }
 
-    function drawPath(path, appearance) {
+    function drawPath(path, appearance, stroke = appearance.color) {
       if (!path) return;
-      svg('path', { d: path, fill: 'none', stroke: appearance.color, 'stroke-width': appearance.weight ?? 2,
+      svg('path', { d: path, fill: 'none', stroke, 'stroke-width': appearance.weight ?? 2,
         'stroke-linejoin': 'round', ...(appearance.dash ? { 'stroke-dasharray': appearance.dash } : {}) });
       visibleLines.push(appearance);
     }
@@ -307,25 +307,82 @@
       if (segments.length) socSeries.push({ appearance, segments });
     }
 
-    function intervalPath(source, key, appearance) {
-      if (!source) return;
+    function intervalSegments(source, key) {
+      if (!source) return [];
       const isDemand = source.kind === 'demand';
       const seconds = source.interval_minutes * 60;
-      let path = '', previous = null;
       const segments = [];
       const values = key === 'measured' && !isDemand ? source.measured_energy ?? source[key] : source[key];
       for (const [stamp, value] of values) {
+        if (!Number.isFinite(stamp) || !Number.isFinite(value)) continue;
         const from = Math.max(start, isDemand ? stamp : stamp - seconds);
         const until = Math.min(end, isDemand ? stamp + seconds : stamp,
-          key === 'measured' ? source.measured_through ?? Infinity : Infinity);
+          key === 'measured' ? source.measured_through ?? (hasCursor ? data.cutoff : Infinity) : Infinity);
         if (until <= from) continue;
-        const plotted = isDemand ? -value : value;
-        path += (from === previous ? 'L' : 'M') + x(from) + ' ' + energyY(plotted) + 'H' + x(until);
-        segments.push([from, until, plotted]);
+        segments.push([from, until, isDemand ? -value : value]);
+      }
+      return segments;
+    }
+
+    function energyPath(segments, shade) {
+      let path = '', area = '', section = '', sectionStart, previous;
+      function finishSection() {
+        if (!section) return;
+        path += section;
+        if (shade) area += section + 'V' + energyY(0) + 'H' + x(sectionStart) + 'Z';
+      }
+      for (const [from, until, value] of segments) {
+        if (from === previous) {
+          section += 'V' + energyY(value);
+        } else {
+          finishSection();
+          sectionStart = from;
+          section = 'M' + x(from) + ' ' + energyY(value);
+        }
+        section += 'H' + x(until);
         previous = until;
       }
-      drawPath(path, appearance);
-      if (segments.length) energySeries.push({ appearance, segments, minutes: source.interval_minutes });
+      finishSection();
+      if (area) svg('path', { d: area, fill: shade, opacity: 0.19 });
+      return path;
+    }
+
+    function energyLine(segments, minutes, appearance, path, forecastAppearance, stroke) {
+      if (!segments.length) return;
+      drawPath(path ?? energyPath(segments), appearance, stroke);
+      energySeries.push({ appearance, segments, minutes, forecastAppearance });
+    }
+
+    function modeledEnergy(source, estimate, prediction) {
+      if (!source) return;
+      const past = intervalSegments(source, 'past');
+      const future = intervalSegments(source, 'forecast');
+      const minutes = source.interval_minutes;
+      if (!hasCursor) {
+        energyLine(past, minutes, estimate);
+        energyLine(future, minutes, prediction);
+        return;
+      }
+      const byStart = new Map([...past, ...future].map(segment => [segment[0], segment]));
+      const segments = [...byStart.values()].sort((a, b) => a[0] - b[0]);
+      const before = segments.some(([from]) => from < data.cutoff);
+      const after = segments.some(([, until]) => until > data.cutoff);
+      if (!before || !after) {
+        energyLine(segments, minutes, before ? estimate : prediction);
+        return;
+      }
+
+      const id = chart.id + '-' + source.kind + '-cutoff';
+      const gradient = svg('linearGradient', { id, gradientUnits: 'userSpaceOnUse',
+        x1: left, x2: right, y1: energyPlotTop, y2: energyPlotTop });
+      svg('defs').append(gradient);
+      const offset = (data.cutoff - start) / (end - start);
+      for (const { color } of [estimate, prediction]) {
+        gradient.append(svg('stop', { offset, 'stop-color': color }));
+      }
+      // A shared stop changes colour at the cursor without breaking the interval step.
+      energyLine(segments, minutes, estimate, undefined, prediction, 'url(#' + id + ')');
+      visibleLines.push(prediction);
     }
 
     function gridBars(rows, appearance) {
@@ -350,15 +407,19 @@
     forecastSocPath('soc', 'end_soc', lines.forecastSoc);
     forecastSocPath('no_charge_soc', 'end_no_charge_soc', lines.unchargedSoc);
 
+    const measuredEnergy = [
+      [solar, lines.measuredSolar],
+      [demand, lines.measuredDemand],
+    ].map(([source, appearance]) => {
+      const segments = intervalSegments(source, 'measured');
+      return { segments, minutes: source?.interval_minutes, appearance, path: energyPath(segments, appearance.color) };
+    });
     gridBars(recordedGrid, lines.recordedGrid);
     gridBars(gridPlan.filter(row => row.source !== 'manual'), lines.automaticGrid);
     gridBars(gridPlan.filter(row => row.source === 'manual'), lines.manualGrid);
-    intervalPath(demand, 'measured', lines.measuredDemand);
-    intervalPath(demand, 'past', lines.estimatedDemand);
-    intervalPath(demand, 'forecast', lines.forecastDemand);
-    intervalPath(solar, 'measured', lines.measuredSolar);
-    intervalPath(solar, 'past', lines.estimatedSolar);
-    intervalPath(solar, 'forecast', lines.forecastSolar);
+    modeledEnergy(solar, lines.estimatedSolar, lines.forecastSolar);
+    modeledEnergy(demand, lines.estimatedDemand, lines.forecastDemand);
+    for (const { segments, minutes, appearance, path } of measuredEnergy) energyLine(segments, minutes, appearance, path);
 
     if (hasCursor) {
       const divider = x(data.cutoff);
@@ -386,13 +447,14 @@
       if (!isSoc && (py < energyPlotTop || py > energyBottom)) return null;
       const time = Math.round(start + (px - left) * (end - start) / (right - left));
       const rows = [];
-      for (const { appearance, segments, minutes } of isSoc ? socSeries : energySeries) {
+      for (const { appearance, segments, minutes, forecastAppearance } of isSoc ? socSeries : energySeries) {
         const point = chartValueAt(segments, time, !isSoc);
         if (!Number.isFinite(point?.value)) continue;
         const value = isSoc
           ? point.value.toFixed(1) + '%'
           : `${point.value.toFixed(2)} kWh · ${Number((minutes ?? point.minutes).toFixed(2))} min`;
-        rows.push({ label: appearance.label, color: appearance.color, value });
+        const style = forecastAppearance && time >= data.cutoff ? forecastAppearance : appearance;
+        rows.push({ label: style.label, color: style.color, value });
       }
       if (!rows.length) return null;
       if (isSoc) {
