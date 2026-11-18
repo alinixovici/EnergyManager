@@ -79,10 +79,12 @@ const SolarGeneration = (() => {
     const measured = withinWindow(data.measured);
     const past = withinWindow(data.past);
     const forecast = withinWindow(data.forecast);
+    const pastStyle = { color: '#BA4A18', label: demand ? 'Estimated' : 'AI past estimate' };
+    const forecastStyle = { color: '#000000', label: demand ? 'Forecast' : 'AI forecast (ensemble median)' };
     const series = [
       { values: measured, color: '#238783', label: demand ? 'Measured' : 'Measured inverter', fill: true },
-      { values: past, color: '#BA4A18', label: demand ? 'Estimated' : 'AI past estimate' },
-      { values: forecast, color: '#000000', label: demand ? 'Forecast' : 'AI forecast (ensemble median)' },
+      { values: past, ...pastStyle },
+      { values: forecast, ...forecastStyle },
     ].filter(line => line.values.length);
 
     if (!series.length) {
@@ -92,6 +94,11 @@ const SolarGeneration = (() => {
     const inWindow = time => Number.isFinite(time) && time >= start && time < end;
     const liveCursor = inWindow(cursorTime);
     const cursor = liveCursor ? cursorTime : inWindow(cutoff) ? cutoff : null;
+    const lastPastHour = past.at(-1)?.[0];
+    const firstForecastHour = forecast[0]?.[0];
+    const solarSplit = demand ? null : cursor ?? (firstForecastHour - lastPastHour === 3600 ? lastPastHour : null);
+    const solarModel = solarSplit !== null && (past.length || forecast.length)
+      ? new Map([...past, ...forecast].sort((a, b) => a[0] - b[0])) : null;
     const width = responsiveFigureWidth(svg, () => draw(svg, data, cursorTime));
     const left = figureLayout.left, right = width - figureLayout.right, top = 82;
     const bottom = top + figureLayout.plotHeight, height = bottom + 135;
@@ -170,13 +177,27 @@ const SolarGeneration = (() => {
     line(left, top, left, bottom, plotColors.axis);
     line(left, bottom, right, bottom, plotColors.axis);
     const clipId = svg.id + '-plot';
-    const clip = svgElement(element('defs', {}), 'clipPath', { id: clipId });
+    const defs = element('defs', {});
+    const clip = svgElement(defs, 'clipPath', { id: clipId });
     svgElement(clip, 'rect', { x: left, y: top, width: right - left, height: bottom - top });
     const plot = element('g', { 'clip-path': 'url(#' + clipId + ')' });
-    const runs = series.map(item => {
+    const graphSeries = solarModel ? series.filter(item => item.fill) : series;
+    let modelStroke;
+    if (solarModel) {
+      const id = svg.id + '-model-cutoff';
+      const gradient = svgElement(defs, 'linearGradient', {
+        id, gradientUnits: 'userSpaceOnUse', x1: left, x2: right, y1: top, y2: top,
+      });
+      // Equal offsets make a hard colour change on the moving cutoff, even between hourly points.
+      const offset = (solarSplit - start) / (end - start);
+      for (const { color } of [pastStyle, forecastStyle]) svgElement(gradient, 'stop', { offset, 'stop-color': color });
+      modelStroke = 'url(#' + id + ')';
+      graphSeries.push({ values: [...solarModel], color: modelStroke });
+    }
+    for (const { values, color, fill } of graphSeries) {
       const segments = [];
       let segment = [];
-      for (const point of item.values) {
+      for (const point of values) {
         if (segment.length && point[0] - segment[segment.length - 1][0] > intervalSeconds) {
           segments.push(segment);
           segment = [];
@@ -184,32 +205,9 @@ const SolarGeneration = (() => {
         segment.push(point);
       }
       segments.push(segment);
-      return { ...item, segments };
-    });
-    const historyRun = runs.find(run => run.values === past);
-    const forecastRun = runs.find(run => run.values === forecast);
-    const lastPast = historyRun?.segments.at(-1);
-    const firstForecast = forecastRun?.segments[0];
-    const pastHour = lastPast?.at(-1)[0];
-    const forecastHour = firstForecast?.[0][0];
-    const joinSolar = !demand && forecastHour - pastHour === intervalSeconds;
-    for (const { segments, color, fill } of runs) {
-      for (const segment of segments) {
-        if (joinSolar && segment === lastPast) continue;
-        if (joinSolar && segment === firstForecast) {
-          // Compute the join from both sets of hourly points and change colour at the last past estimate.
-          drawSegment([...lastPast, ...firstForecast], historyRun.color, false,
-            { index: lastPast.length, color });
-        } else {
-          drawSegment(segment, color, fill);
-        }
-      }
+      for (const segment of segments) drawSegment(segment, color, fill);
     }
-    function strokeSolarPath(path, color) {
-      svgElement(plot, 'path', { d: path, fill: 'none', stroke: color,
-        'stroke-width': color === '#000000' ? 2.8 : 2.4, 'stroke-linejoin': 'round' });
-    }
-    function drawSegment(points, color, fill, continuation) {
+    function drawSegment(points, color, fill) {
       const through = fill ? data.measured_through ?? Infinity : Infinity;
       const xy = points.map(([time, power]) => [x(demand ? time : Math.min(time, through)), y(power)]);
       if (demand) {
@@ -247,25 +245,19 @@ const SolarGeneration = (() => {
       let path = 'M' + xy[0].join(',');
       for (let i = 1; i < xy.length; i++) {
         const [x0, y0] = xy[i - 1], [x1, y1] = xy[i];
-        if (i === continuation?.index) {
-          if (i === 1) svgElement(plot, 'circle', { cx: x0, cy: y0, r: 2.5, fill: color });
-          else strokeSolarPath(path, color);
-          color = continuation.color;
-          path = 'M' + [x0, y0].join(',');
-        }
         const third = (x1 - x0) / 3;
         path += ' C' + [x0 + third, y0 + third * slopes[i - 1], x1 - third, y1 - third * slopes[i], x1, y1].join(',');
       }
       if (fill) svgElement(plot, 'path', { d: path + ' V' + bottom + ' H' + xy[0][0] + ' Z', fill: color, opacity: 0.22 });
-      strokeSolarPath(path, color);
+      svgElement(plot, 'path', { d: path, fill: 'none', stroke: color,
+        'stroke-width': color === forecastStyle.color || color === modelStroke ? 2.8 : 2.4,
+        'stroke-linejoin': 'round' });
     }
     if (cursor !== null) {
       const divider = x(cursor);
       line(divider, top, divider, bottom, '#34465a', 2.5, '2 5');
-      const atHandoff = joinSolar && cursor >= pastHour && cursor <= forecastHour;
       window.SolarLoggerCursor.draw(svg, {
         time: cursor, timeZone: data.timezone, x: divider, top: top + 63, left, right,
-        ...(atHandoff ? { before: x(pastHour), after: x(forecastHour) } : {}),
       });
     }
     const totalData = { ...data, measured, past, forecast };
@@ -299,14 +291,21 @@ const SolarGeneration = (() => {
     label((left + right) / 2, bottom + 72, data.timezone === 'Europe/London'
       ? 'UK local time' : data.timezone + ' local time', 'middle', figureLayout.label);
     const widths = { 'Measured inverter': 178, 'AI past estimate': 167, 'AI forecast (ensemble median)': 238, Measured: 132, Estimated: 135, Forecast: 120 };
+    const legendSeries = solarModel ? series.filter(item => item.fill) : series;
+    if (solarModel) {
+      const hours = [...solarModel.keys()];
+      if (hours[0] <= solarSplit) legendSeries.push(pastStyle);
+      if (hours.at(-1) > solarSplit) legendSeries.push(forecastStyle);
+    }
     let position = left;
-    for (const { color, label: title } of series) {
+    for (const { color, label: title } of legendSeries) {
       line(position, height - 31, position + 27, height - 31, color, color === '#000000' ? 2.8 : 2.4);
       label(position + 36, height - 27, title, 'start', figureLayout.label);
       position += widths[title];
     }
     const formatInterval = intervalTitle(data.timezone);
-    const hoverSeries = series.map(item => ({ ...item, values: new Map(item.values) }));
+    const hoverSeries = series.filter(item => !solarModel || item.fill)
+      .map(item => ({ ...item, values: new Map(item.values) }));
     const unit = demand ? ' kWh' : ' kW';
     window.SolarLoggerChartHover.attach(svg, (pointerX, pointerY) => {
       if (pointerX < left || pointerX > right || pointerY < top || pointerY > bottom) return null;
@@ -316,19 +315,23 @@ const SolarGeneration = (() => {
         time <= data.measured_through && time > Math.floor(data.measured_through / intervalSeconds) * intervalSeconds;
       const sample = demand
         ? Math.floor(Math.min(time, end - 1) / intervalSeconds) * intervalSeconds
-        : (partial ? Math.ceil(data.measured_through / intervalSeconds) : Math.round(time / intervalSeconds)) * intervalSeconds;
+        : (solarModel || partial ? Math.ceil(time / intervalSeconds) : Math.round(time / intervalSeconds)) * intervalSeconds;
       const rows = [];
       for (const { values, label, color, fill } of hoverSeries) {
         if (fill && time > data.measured_through) continue;
         const value = values.get(sample);
         if (Number.isFinite(value)) rows.push({ label, value: value.toFixed(2) + unit, color });
       }
+      const modeledValue = solarModel?.get(sample);
+      if (Number.isFinite(modeledValue)) {
+        rows.push({ ...(time <= solarSplit ? pastStyle : forecastStyle), value: modeledValue.toFixed(2) + unit });
+      }
       if (!rows.length) return null;
       const first = demand ? sample : sample - intervalSeconds;
       return {
         title: formatInterval(first, first + intervalSeconds),
         rows,
-        guide: { x: demand ? pointerX : x(partial ? data.measured_through : sample), top, bottom },
+        guide: { x: demand || solarModel ? pointerX : x(partial ? data.measured_through : sample), top, bottom },
       };
     });
     return { hasData: true, warning };
