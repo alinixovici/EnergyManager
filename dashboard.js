@@ -47,11 +47,15 @@
   const monthLabel = month => new Date(month + '-01T00:00:00Z')
     .toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const write = (name, value) => { id(name).textContent = value; };
-  const kilowatts = value => ((Math.abs(value) < 5 ? 0 : value) / 1000)
+  const kilowatts = value => (value / 1000)
     .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const flowPower = value => value == null ? '—' : `${kilowatts(Math.abs(value))} kW`;
   const energy = (value, unit = '') => value == null ? '—' : value.toLocaleString(undefined, { maximumFractionDigits: 2 }) + unit;
-  const timeOf = minute => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+  const timeOf = minute => {
+    const seconds = Math.round(minute * 60);
+    const clock = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60].map(value => String(value).padStart(2, '0')).join(':');
+    return seconds % 60 ? clock + ':' + String(seconds % 60).padStart(2, '0') : clock;
+  };
   const stateOf = (value, positive, negative) => value == null ? '' : value > 0 ? positive : value < 0 ? negative : 'Idle';
 
   function arrow(name, direction) {
@@ -108,7 +112,7 @@
     return node;
   }
 
-  const batteryPrediction = data.batteryPlanForecast(root, () => window.energyCloud.readControl({ forecastOnly: true }));
+  const batteryPrediction = data.batteryPlanForecast(root, () => window.energyCloud.readControl());
 
   function powerTick(span) {
     const rough = Math.max(10, span / 5);
@@ -548,7 +552,7 @@
 
   function rechargeThreshold() {
     const reserve = inverterSettings?.reserve;
-    return Number.isInteger(reserve) && reserve >= 0 && reserve < 100 ? reserve + 1 : undefined;
+    return Number.isInteger(reserve) && reserve >= 0 && reserve < 100 ? reserve : undefined;
   }
 
   function showBatteryReserve() {

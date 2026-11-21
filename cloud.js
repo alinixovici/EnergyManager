@@ -7,7 +7,6 @@
     'Batt Charge Today', 'Combined Gen Today', 'Combined Gen Total',
     'Import Total', 'Export Total', 'Import Today', 'Export Today'];
   const column = name => name.toLowerCase().replaceAll(' ', '_').replaceAll('%', 'percent');
-  const graphColumns = ['time', ...['PPV', 'Load', 'SOC%', 'AC Charge Total'].map(column)].join(',');
   const stamp = row => new Date(row.time).toISOString().replace(/\.\d+Z$/, 'Z');
   const number = (row, name) => {
     const value = row[column(name)];
@@ -22,7 +21,6 @@
   let client;
   let newestSample = -Infinity;
   let stopSampleWatch;
-  let measuredCache;
   const table = () => client.from('energy_readings');
   function publishSample(row) {
     const time = Date.parse(row?.time);
@@ -49,105 +47,29 @@
       inclusive = false;
     }
   }
-  function readMeasured(start) {
-    const source = client;
-    if (!source) return Promise.resolve({ rows: [] });
-    const from = start - 7201;
-    if (!measuredCache || measuredCache.from > from || from - measuredCache.from > 86400) {
-      measuredCache = { from, next: from, rows: [], pending: Promise.resolve() };
-    }
-    const cache = measuredCache;
-    const through = Number.isFinite(newestSample) ? newestSample / 1000 + 1 : Date.now() / 1000 + 1;
-    const iso = time => new Date(time * 1000).toISOString();
-    const read = cache.pending.catch(() => {}).then(async () => {
-      if (cache.next < through) {
-        const samples = await range(iso(cache.next), iso(through), graphColumns, source);
-        if (client !== source) return { rows: [] };
-        for (const sample of samples) {
-          const time = Date.parse(sample.time) / 1000;
-          cache.rows.push({ time, solar: number(sample, 'PPV'), demand: number(sample, 'Load'),
-            soc: number(sample, 'SOC%'), grid: number(sample, 'AC Charge Total') });
-          cache.next = time + 1;
-        }
-      }
-      return client === source ? { rows: cache.rows.filter(row => row.time >= from) } : { rows: [] };
-    });
-    cache.pending = read;
-    return read;
-  }
-  const controlColumns = 'time,end_time,soc,estimated_soc,no_charge_soc,end_soc,end_no_charge_soc,'
-    + 'demand_kwh,estimated_demand_kwh,solar_kwh,estimated_solar_kwh,grid_kwh';
-  const controlPlan = source => query(source.from('control_graph').select('time,metadata').eq('series', 'plan').maybeSingle());
-  async function recordedGrid(source, start, cutoff) {
-    if (!Number.isFinite(cutoff) || cutoff <= start) return [];
-    const read = time => new Date(time * 1000).toISOString();
-    const readings = await range(read(start - 300), read(cutoff + 1), 'time,ac_charge_total', source);
-    const intervals = new Map();
-    let previous;
-    for (const row of readings) {
-      const time = Date.parse(row.time) / 1000;
-      const value = number(row, 'AC Charge Total');
-      if (!Number.isFinite(time) || value === null || value < 0) continue;
-      if (previous) {
-        const seconds = time - previous.time;
-        const change = value - previous.value;
-        if (seconds > 0 && seconds <= 300 && change > 0) {
-          for (let from = Math.max(start, previous.time); from < Math.min(time, cutoff);) {
-            const block = Math.floor(from / 1800) * 1800;
-            const end = Math.min(time, cutoff, block + 1800);
-            intervals.set(block, (intervals.get(block) ?? 0) + change * (end - from) / seconds);
-            from = end;
-          }
-        }
-      }
-      previous = { time, value };
-    }
-    return [...intervals].map(([block, grid_kwh]) => ({
-      time: Math.max(start, block), end: Math.min(cutoff, block + 1800), grid_kwh,
-    }));
-  }
-
-  async function controlPoints(source, series, start, end) {
-    const rows = [];
-    let cursor;
-    for (;;) {
-      const request = source.from('control_graph').select(controlColumns).eq('series', series)
-        .lt('time', end).order('time').limit(1000);
-      const page = await query(cursor ? request.gt('time', cursor) : request.gte('time', start));
-      if (!page.length) return rows;
-      for (const { time, end_time, ...values } of page) {
-        rows.push({ ...values, time: Date.parse(time) / 1000, end: end_time ? Date.parse(end_time) / 1000 : null });
-      }
-      cursor = page.at(-1).time;
-    }
-  }
-  async function forecastSnapshot(tableName, columns, versionFields = []) {
+  async function readDisplay(kind) {
     if (!client) throw new Error('Connect to Supabase first.');
     const source = client;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const rows = [];
-      let cursor;
-      let version = [];
-      for (;;) {
-        let request = source.from(tableName).select(columns).order('time').limit(500);
-        if (cursor !== undefined) request = request.gt('time', cursor);
-        for (const [key, value] of version) request = request.eq(key, value);
-        const page = await query(request);
-        if (client !== source) throw new Error('The Supabase connection changed.');
-        if (!page.length) break;
-        if (!rows.length) version = versionFields.filter(key => page[0][key] != null).map(key => [key, page[0][key]]);
-        rows.push(...page);
-        cursor = page.at(-1).time;
+    let snapshot;
+    try {
+      snapshot = await query(source.from('dashboard_display').select('updated_at,data').eq('kind', kind).maybeSingle());
+    } catch (error) {
+      if (error.code === '42P01' || error.code === 'PGRST205') {
+        throw new Error('Run display-read.sql in Supabase and install the updated NAS app to receive display values.');
       }
-      if (!version.length) return rows;
-      const [latest] = await query(source.from(tableName).select(columns).order('time', { ascending: false }).limit(1));
-      if (client !== source) throw new Error('The Supabase connection changed.');
-      if (latest && version.every(([key, value]) => latest[key] === value)) return rows;
+      throw error;
     }
-    throw new Error('The NAS is updating the forecast. Try refreshing again.');
+    if (client !== source) throw new Error('The Supabase connection changed.');
+    return snapshot?.data ?? null;
+  }
+  function watchDisplay(kind, refresh) {
+    const source = client;
+    const channel = source.channel('display:' + kind)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dashboard_display', filter: 'kind=eq.' + kind }, refresh)
+      .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
+    return () => source.removeChannel(channel);
   }
   window.energyCloud = {
-    readMeasured,
     start(refresh) {
       function connect() {
         try {
@@ -167,7 +89,6 @@
           dashboard.hidden = false;
           stopSampleWatch?.();
           newestSample = -Infinity;
-          measuredCache = null;
           window.dispatchEvent(new Event("energy-cloud-connected"));
           const source = client;
           const channel = source.channel('forecast:energy_readings')
@@ -187,47 +108,8 @@
       document.getElementById('solar-back').onclick = () => { form.hidden = false; };
       connect();
     },
-    watchControl(refresh) {
-      const source = client;
-      const changes = { schema: 'public', table: 'control_graph', filter: 'series=eq.plan' };
-      const channel = source.channel('control-graph-plan')
-        .on('postgres_changes', { ...changes, event: 'INSERT' }, refresh)
-        .on('postgres_changes', { ...changes, event: 'UPDATE' }, refresh)
-        .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
-      return () => source.removeChannel(channel);
-    },
-    async readControl({ forecastOnly = false } = {}) {
-      if (!client) throw new Error('Connect to Supabase first.');
-      const source = client;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const plan = await controlPlan(source);
-        if (client !== source) throw new Error('The Supabase connection changed.');
-        if (!plan) return null;
-        const metadata = plan.metadata;
-        if (!Number.isFinite(metadata?.as_of) || !Number.isFinite(metadata.start)
-          || !Number.isFinite(metadata.end) || metadata.end <= metadata.start) {
-          throw new Error('The published Control plan has no valid time window.');
-        }
-        const start = new Date(metadata.start * 1000).toISOString();
-        const end = new Date(metadata.end * 1000).toISOString();
-        const [forecast, ...history] = await Promise.all([
-          controlPoints(source, 'forecast', start, end),
-          ...(forecastOnly ? [] : [
-            ...['history_soc', 'history'].map(series => controlPoints(source, series, start, end)),
-            Array.isArray(metadata.history_grid) ? metadata.history_grid
-              : recordedGrid(source, metadata.start, metadata.cutoff).catch(() => []),
-          ]),
-        ]);
-        const latest = await controlPlan(source);
-        if (client !== source) throw new Error('The Supabase connection changed.');
-        if (latest?.time === plan.time && latest.metadata?.as_of === metadata.as_of) {
-          if (forecastOnly) return { ...metadata, forecast };
-          const [history_soc, historyRows, history_grid] = history;
-          return { ...metadata, history_soc, history: historyRows, forecast, history_grid };
-        }
-      }
-      throw new Error('The NAS is updating the Control plan. Try refreshing again.');
-    },
+    watchControl(refresh) { return watchDisplay('control', refresh); },
+    readControl() { return readDisplay('control'); },
     async readControlButtonStatus() {
       if (!client) throw new Error('Connect to Supabase first.');
       const source = client;
@@ -238,27 +120,10 @@
       return status;
     },
     watchForecast(table, refresh) {
-      const source = client;
-      const channel = source.channel('forecast:' + table)
-        .on('postgres_changes', { event: '*', schema: 'public', table }, refresh)
-        .subscribe(state => { if (state === 'SUBSCRIBED') refresh(); });
-      return () => source.removeChannel(channel);
+      return watchDisplay(table === 'solar_generation_estimate' ? 'solar' : 'demand', refresh);
     },
-    async readDemandForecast() {
-      return forecastSnapshot('home_demand_estimate', '*', ['chart_as_of', 'latest_reading']);
-    },
-    async readForecast() {
-      return forecastSnapshot('solar_generation_estimate', '*', ['chart_as_of', 'forecast_download_utc']);
-    },
-    async readDemandErrors() {
-      try {
-        return await forecastSnapshot('demand_error',
-          'time,block_end,day,period,range_low_kwh,range_high_kwh,measured_kwh,error_kwh');
-      } catch (error) {
-        if (error.code === '42P01' || error.code === 'PGRST205') return [];
-        throw error;
-      }
-    },
+    readDemandForecast() { return readDisplay('demand'); },
+    readForecast() { return readDisplay('solar'); },
     async read(selectedDate) {
       if (!client) return;
       const source = client;
@@ -271,7 +136,7 @@
       const history = await range(day.toISOString(), new Date(+day + 86400000).toISOString());
       return {
         date, system: record(latest), meter: record(latest),
-        reserve: number(latest, 'battery_soc_reserve') ?? 4,
+        reserve: number(latest, 'battery_soc_reserve'),
         selectedFile: history.length ? systemFile(history, date.slice(0, 7)) : undefined,
       };
     },

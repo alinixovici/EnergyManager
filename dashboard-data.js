@@ -62,25 +62,6 @@
     return { system: newest, meter: newest ? meter.findLast(row => row.stamp === newest.stamp) : undefined };
   }
 
-  function forecastBatteryTarget(plan, now, power) {
-    if (!Number.isFinite(power) || power === 0 || plan?.ok !== true || !Array.isArray(plan.forecast)) return null;
-    const charging = power < 0;
-    const target = charging ? 100 : plan.reserve;
-    if (!Number.isFinite(target) || target < 0 || target > 100) return null;
-
-    let at = Infinity;
-    for (const { time, end, soc, end_soc } of plan.forecast) {
-      if (![time, end, soc, end_soc].every(Number.isFinite) || end <= time || end < now ||
-          soc < 0 || soc > 100 || end_soc < 0 || end_soc > 100) continue;
-      const reachesTarget = charging ? soc < target && end_soc >= target : soc > target && end_soc <= target;
-      if (!reachesTarget) continue;
-
-      const crossing = time + (target - soc) * (end - time) / (end_soc - soc);
-      if (crossing >= now) at = Math.min(at, crossing);
-    }
-    return Number.isFinite(at) ? { at, target, charging } : null;
-  }
-
   function batteryPlanForecast(root, readPlan) {
     const status = root.querySelector('#solar-battery-reserve-forecast');
     const label = status.querySelector('span');
@@ -89,7 +70,8 @@
     let lastCheck = 0;
 
     function render(now) {
-      const prediction = forecastBatteryTarget(plan, now, batteryPower);
+      const saved = plan?.battery_target;
+      const prediction = Number.isFinite(saved?.at) && saved.at >= now ? saved : null;
       status.hidden = prediction === null;
       if (!prediction) return;
 
@@ -187,14 +169,8 @@
       for (const line of text.slice(0, newline).split('\n')) {
         const values = cells(line, header);
         if (!values || values[0] < from || values[0] >= to) continue;
-        const minute = Number(values[0].slice(11, 13)) * 60 + Number(values[0].slice(14, 16));
-        if (!state.minutes.has(minute)) state.minutes.set(minute, { sums: Array(7).fill(0), counts: Array(7).fill(0) });
-        const bucket = state.minutes.get(minute);
-        chartValues(values, header.columns).forEach((value, index) => {
-          if (value === null) return;
-          bucket.sums[index] += value;
-          bucket.counts[index]++;
-        });
+        const minute = Number(values[0].slice(11, 13)) * 60 + Number(values[0].slice(14, 16)) + Number(values[0].slice(17, 19)) / 60;
+        state.minutes.set(minute, { values: chartValues(values, header.columns) });
       }
       at += newline + 1; // Solar Logger CSV rows use ASCII fields.
       state.cursor = at;
@@ -209,7 +185,7 @@
 
   function points(state) {
     return state ? [...state.minutes].sort((a, b) => a[0] - b[0]).map(([minute, bucket]) => ({
-      minute, values: bucket.sums.map((sum, index) => bucket.counts[index] ? sum / bucket.counts[index] : null),
+      minute, values: bucket.values,
     })) : [];
   }
 

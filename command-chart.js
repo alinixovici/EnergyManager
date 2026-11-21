@@ -89,7 +89,7 @@
     const [start, end, value, endValue] = segments[lo - 1];
     if (time > end || (interval && time === end)) return null;
     if (interval) return { value, minutes: (end - start) / 60 };
-    return { value: start === end ? value : value + (endValue - value) * (time - start) / (end - start) };
+    return { value: time === end ? endValue : value };
   }
 
   function draw(data, formatters) {
@@ -101,9 +101,6 @@
     const recordedGrid = Array.isArray(data.history_grid) ? data.history_grid : history;
     const minuteHistory = Array.isArray(data.history_soc) && data.history_soc.length;
     const socHistory = minuteHistory ? data.history_soc : history;
-    // Saved plans may predate the operating floor in the historical calculation.
-    const minimumSoc = Number.isFinite(data.minimum_operating_soc) ? data.minimum_operating_soc : 0;
-    const modelledSoc = value => Math.max(minimumSoc, value);
     chart.replaceChildren();
     const hover = window.SolarLoggerChartHover;
     if (!formatters) {
@@ -272,18 +269,16 @@
     function socPath(rows, key, appearance, maximumGap, resets) {
       let path = '', previous = null;
       const segments = [];
-      for (const { time, [key]: reading } of rows) {
-        if (!Number.isFinite(time) || !Number.isFinite(reading)) continue;
-        const value = key === 'estimated_soc' ? modelledSoc(reading) : reading;
+      for (const { time, [key]: value } of rows) {
+        if (!Number.isFinite(time) || !Number.isFinite(value)) continue;
         const continuous = previous !== null && time - previous[0] <= maximumGap;
         const reset = resets?.get(time);
         const hasPrior = reset && Number.isFinite(reset.prior_soc);
-        const prior = hasPrior ? modelledSoc(reset.prior_soc) : null;
         if (hasPrior && continuous) {
-          path += 'L' + x(time) + ' ' + socY(prior);
+          path += 'L' + x(time) + ' ' + socY(reset.prior_soc);
         }
         if (continuous && (!reset || hasPrior)) {
-          segments.push([previous[0], time, previous[1], hasPrior ? prior : value]);
+          segments.push([previous[0], time, previous[1], hasPrior ? reset.prior_soc : value]);
         }
         path += (continuous && !reset ? 'L' : 'M') + x(time) + ' ' + socY(value);
         previous = [time, value];
@@ -298,11 +293,10 @@
       const segments = [];
       for (const row of forecast) {
         if (![row.time, row.end, row[key], row[endKey]].every(Number.isFinite)) continue;
-        const value = modelledSoc(row[key]), endValue = modelledSoc(row[endKey]);
-        if (row.time !== previous) path += 'M' + x(row.time) + ' ' + socY(value);
-        path += 'L' + x(row.end) + ' ' + socY(endValue);
+        if (row.time !== previous) path += 'M' + x(row.time) + ' ' + socY(row[key]);
+        path += 'L' + x(row.end) + ' ' + socY(row[endKey]);
         previous = row.end;
-        segments.push([row.time, row.end, value, endValue]);
+        segments.push([row.time, row.end, row[key], row[endKey]]);
       }
       drawPath(path, appearance);
       if (segments.length) socSeries.push({ appearance, segments });
@@ -506,20 +500,12 @@
   }
 
   function renderDailyCharging(data, formatters, days) {
-    const slots = (data.schedule ?? []).filter(slot =>
-      [slot.start, slot.end, slot.kwh].every(Number.isFinite) && slot.end > slot.start && slot.kwh > 0);
-    const entries = data.ok || slots.length ? days.flatMap((start, i) => {
-      const end = days[i + 1] ?? data.end;
-      if (end <= data.as_of) return [];
-      const energy = slots.reduce((total, slot) => {
-        const overlap = Math.max(0, Math.min(end, slot.end) - Math.max(start, slot.start));
-        return total + slot.kwh * overlap / (slot.end - slot.start);
-      }, 0);
+    const entries = (data.daily_charging ?? []).filter(row => Number.isFinite(row.start) && Number.isFinite(row.kwh)).map(({ start, kwh: energy }) => {
       const entry = html('div');
       if (energy > 0) entry.className = 'solar-command-charge-day';
       entry.append(html('dt', formatters.day.format(start * 1000)), html('dd', energy.toFixed(2) + ' kWh'));
-      return [entry];
-    }) : [];
+      return entry;
+    });
     dailyCharge.replaceChildren(...entries);
     dailyCharge.hidden = !entries.length;
   }
@@ -658,11 +644,6 @@
     }
   }
 
-  const livePlan = SolarGeneration.liveView(start => cloud.readMeasured(start),
-    () => !panel.hidden && !document.hidden, data => {
-      figure.hidden = !draw(data, timestampFormatters(data.timezone));
-    }, SolarGeneration.withLiveControl);
-
   async function refresh() {
     if (panel.hidden || document.hidden) return;
     if (loading) { pending = true; return; }
@@ -679,21 +660,19 @@
         const [demand, solar] = await Promise.allSettled([cloud.readDemandForecast(), cloud.readForecast()]);
         if (connection !== generation) return;
         energyPlots = {
-          demand: demand.status === 'fulfilled' ? publishedForecastData(demand.value, 'demand') : null,
-          solar: solar.status === 'fulfilled' ? publishedForecastData(solar.value, 'solar') : null,
+          demand: demand.status === 'fulfilled' ? demand.value : null,
+          solar: solar.status === 'fulfilled' ? solar.value : null,
         };
       }
       const snapshot = data ? { ...data, energy_plots: energyPlots }
         : { status: 'unavailable', message: 'No Control plan has arrived from the NAS.' };
       render(snapshot);
-      livePlan.show(snapshot);
       summary.hidden = false;
     } catch (error) {
       if (connection === generation) {
         const message = error.code === '42501'
-          ? 'Run control-read.sql in Supabase to enable Control reads.'
+          ? 'Run display-read.sql in Supabase to enable the published display values.'
           : error.message || 'Could not read the Control plan from Supabase.';
-        livePlan.reset();
         render({ status: 'unavailable', message });
         summary.hidden = false;
       }
@@ -712,7 +691,6 @@
     generation++;
     clearTimeout(updateTimer);
     stopWatching?.();
-    livePlan.reset();
     render({});
     showButtonStatus(null);
     summary.hidden = true;
