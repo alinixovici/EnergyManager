@@ -6,7 +6,7 @@ The website displays values published by the NAS through Supabase. Forecasts,
 SOC limits, energy integration, totals, error ranges and battery target times
 are calculated on the NAS. The website only formats values and draws graphs.
 
-Install NAS app 18.22 or later and run [display-read.sql](display-read.sql) once
+Install NAS app 18.23 or later and run [display-read.sql](display-read.sql) once
 in Supabase after the existing Control setup. Missing snapshots stay unavailable;
 the website does not calculate substitutes. Display publication follows inverter
 samples independently of the existing forecast and charging-plan schedules.
